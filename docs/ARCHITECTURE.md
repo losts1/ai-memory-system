@@ -113,7 +113,11 @@ python3 hybrid_memory_search.py "your topic" --files-only
 
 **Model:** `nomic-embed-text` (768-dim, local Ollama)
 
-**Usage:** Pass `--use-embeddings` to `hybrid_memory_search.py` to search the local FAISS index instead of Neo4j's vector index. Returns L2 distance scores (lower = more similar). Requires `faiss-cpu` (`pip install faiss-cpu`).
+**Usage:** Pass `--use-embeddings` to `hybrid_memory_search.py` to use FAISS instead of Neo4j for the semantic layer. Requires `faiss-cpu` (included in `requirements.txt`).
+
+**Caveats:**
+- **Score direction is inverted vs Neo4j**: FAISS returns L2 distance (lower = more similar); Neo4j vector returns cosine similarity (higher = more similar). Do not merge or rank results from both sources together without normalizing.
+- **Index must be built manually**: The index files are not auto-populated. They will not exist on a fresh install — `--use-embeddings` returns empty results silently until the index is built from existing Fact embeddings.
 
 ---
 

@@ -97,14 +97,20 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 When asked about learned topics, concepts, or prior knowledge:
 
 **ALWAYS use hybrid search first:**
-- **Default (Neo4j Vector)**: `python3 ~/.openclaw/workspace/hybrid_memory_search.py "<query>" --max-results 5`
-- **With graph context**: `python3 ~/.openclaw/workspace/hybrid_memory_search.py "<query>" --graph --max-results 5`
-- **Files only**: `python3 ~/.openclaw/workspace/hybrid_memory_search.py "<query>" --files-only`
+- **Default (Neo4j Vector)**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --max-results 5`
+- **With graph context**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --graph --max-results 5`
+- **Files only**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --files-only`
+- **Local FAISS (offline)**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --use-embeddings`
 
 This searches:
 - **Neo4j vector index** — Semantic similarity via Fact.embedding
 - **Neo4j knowledge graph** — Facts, Sessions, Relationships
 - **Memory files** — `MEMORY.md` and `memory/*.md` (curated + daily notes)
+- **FAISS local index** — Offline fallback; use `--use-embeddings` when Neo4j is unavailable
+
+**FAISS notes (read before using `--use-embeddings`):**
+- Scores are **L2 distance** (lower = more similar), opposite of Neo4j cosine scores (higher = more similar). Do not compare or mix the two in ranked output.
+- The FAISS index (`memory/embeddings/faiss.index` + `faiss_meta.pkl`) must be built before use — it is not auto-populated. If those files don't exist, the flag returns empty results silently. Build the index by running a separate build script or seeding it from existing Neo4j Fact embeddings.
 
 ## 💓 Heartbeats — Be Proactive!
 
