@@ -57,30 +57,36 @@ Create these in `~/.openclaw/workspace/memory/core/`:
 
 ### Step 4: Initialize Neo4j
 
-1. Install Neo4j (Docker recommended):
+1. Start Neo4j (Docker recommended):
    ```bash
    docker run -d --name neo4j \
      -p 7474:7474 -p 7687:7687 \
      -e NEO4J_AUTH=neo4j/your_password \
      -v ~/.openclaw/neo4j-data:/data \
      neo4j:latest
+
+   # Wait for Neo4j to be ready before proceeding
+   docker logs -f neo4j 2>&1 | grep -m1 "Started"
    ```
 
-2. Create Python virtual environment:
-   ```bash
-   python3 -m venv ~/.openclaw/workspace/neo4j-venv
-   source ~/.openclaw/workspace/neo4j-venv/bin/activate
-   pip install neo4j python-dotenv
-   ```
-
-3. Create `~/.openclaw/workspace/.env.neo4j`:
+2. Create `~/.openclaw/workspace/.env.neo4j`:
    ```
    NEO4J_URI=bolt://localhost:7687
    NEO4J_USERNAME=neo4j
    NEO4J_PASSWORD=your_password
    ```
 
-4. Initialize schema: `python3 scripts/neo4j_seed.py`
+3. Create Python virtual environment:
+   ```bash
+   python3 -m venv ~/.openclaw/workspace/neo4j-venv
+   source ~/.openclaw/workspace/neo4j-venv/bin/activate
+   pip install neo4j python-dotenv ollama
+   ```
+
+4. Initialize schema (Neo4j must be running first):
+   ```bash
+   python3 scripts/neo4j_seed.py
+   ```
 
 ### Step 5: Set Up Cron Jobs
 

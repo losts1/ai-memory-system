@@ -99,14 +99,12 @@ When asked about learned topics, concepts, or prior knowledge:
 **ALWAYS use hybrid search first:**
 - **Default (Neo4j Vector)**: `python3 ~/.openclaw/workspace/hybrid_memory_search.py "<query>" --max-results 5`
 - **With graph context**: `python3 ~/.openclaw/workspace/hybrid_memory_search.py "<query>" --graph --max-results 5`
-- **FAISS embeddings**: `python3 ~/.openclaw/workspace/hybrid_memory_search.py "<query>" --use-embeddings`
 - **Files only**: `python3 ~/.openclaw/workspace/hybrid_memory_search.py "<query>" --files-only`
 
 This searches:
 - **Neo4j vector index** — Semantic similarity via Fact.embedding
 - **Neo4j knowledge graph** — Facts, Sessions, Relationships
 - **Memory files** — `MEMORY.md` and `memory/*.md` (curated + daily notes)
-- **FAISS index** — Local semantic search (fallback)
 
 ## 💓 Heartbeats — Be Proactive!
 

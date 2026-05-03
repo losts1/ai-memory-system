@@ -52,7 +52,19 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
    cp -r docs ~/.openclaw/workspace/
    ```
 
-5. **Set up Neo4j:**
+5. **Start Neo4j (Docker):**
+   ```bash
+   docker run -d --name neo4j \
+     -p 7474:7474 -p 7687:7687 \
+     -e NEO4J_AUTH=neo4j/your_password_here \
+     -v ~/.openclaw/neo4j-data:/data \
+     neo4j:latest
+
+   # Wait ~15s for Neo4j to finish starting
+   docker logs -f neo4j 2>&1 | grep -m1 "Started"
+   ```
+
+6. **Set up Python environment and initialize schema:**
    ```bash
    # Create .env.neo4j
    cat > ~/.openclaw/workspace/.env.neo4j << EOF
@@ -66,17 +78,8 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
    source ~/.openclaw/workspace/neo4j-venv/bin/activate
    pip install neo4j python-dotenv ollama
 
-   # Initialize schema
+   # Initialize schema (Neo4j must be running first)
    python3 ~/.openclaw/workspace/scripts/neo4j_seed.py
-   ```
-
-6. **Start Neo4j (Docker):**
-   ```bash
-   docker run -d --name neo4j \
-     -p 7474:7474 -p 7687:7687 \
-     -e NEO4J_AUTH=neo4j/your_password_here \
-     -v ~/.openclaw/neo4j-data:/data \
-     neo4j:latest
    ```
 
 7. **Register cron jobs:**

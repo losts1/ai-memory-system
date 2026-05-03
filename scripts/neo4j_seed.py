@@ -3,10 +3,11 @@
 Neo4j Schema Initialization for AI Memory System
 
 Creates the knowledge graph schema:
-- Fact nodes (learned topics with embeddings)
+- Fact nodes (learned topics)
 - Session nodes (raw session logs)
-- Relationships (LEARNED_IN, RELATED_TO, etc.)
-- Vector index for semantic search
+- Relationships (LEARNED_IN)
+- Vector index for semantic search (requires Neo4j 5.x+)
+- Full-text index for keyword search
 
 Usage:
     python3 neo4j_seed.py
@@ -22,17 +23,17 @@ load_dotenv(Path.home() / ".openclaw" / "workspace" / ".env.neo4j")
 
 from neo4j import GraphDatabase
 
+
 def create_schema(driver):
     """Create Neo4j schema for memory system."""
 
     with driver.session() as session:
-        # 1. Create constraints (unique IDs)
+        # 1. Constraints (unique IDs)
         print("Creating constraints...")
 
         constraints = [
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (f:Fact) REQUIRE f.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (t:Topic) REQUIRE t.name IS UNIQUE",
+            "CREATE CONSTRAINT fact_id_unique IF NOT EXISTS FOR (f:Fact) REQUIRE f.id IS UNIQUE",
+            "CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
         ]
 
         for constraint in constraints:
@@ -42,14 +43,12 @@ def create_schema(driver):
                 if "already exists" not in str(e).lower():
                     print(f"  Warning: {e}")
 
-        # 2. Create indexes
+        # 2. Range indexes for common lookups
         print("Creating indexes...")
 
         indexes = [
-            "CREATE INDEX IF NOT EXISTS FOR (f:Fact) ON (f.created)",
-            "CREATE INDEX IF NOT EXISTS FOR (f:Fact) ON (f.priority)",
-            "CREATE INDEX IF NOT EXISTS FOR (s:Session) ON (s.date)",
-            "CREATE INDEX IF NOT EXISTS FOR (t:Topic) ON (t.category)",
+            "CREATE INDEX session_date_idx IF NOT EXISTS FOR (s:Session) ON (s.date)",
+            "CREATE INDEX fact_source_idx IF NOT EXISTS FOR (f:Fact) ON (f.source)",
         ]
 
         for index in indexes:
@@ -59,61 +58,62 @@ def create_schema(driver):
                 if "already exists" not in str(e).lower():
                     print(f"  Warning: {e}")
 
-        # 3. Create vector index for embeddings (Neo4j 5.x+)
+        # 3. Vector index for semantic search (Neo4j 5.x DDL syntax)
         print("Creating vector index...")
 
-        vector_index = """
-        CALL db.index.vector.createNodeIndex IF NOT EXISTS
-        ('fact_embeddings', 'Fact', 'embedding', 768, 'cosine')
-        """
-
         try:
-            session.run(vector_index)
+            session.run("""
+                CREATE VECTOR INDEX fact_embeddings IF NOT EXISTS
+                FOR (n:Fact) ON (n.embedding)
+                OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}
+            """)
             print("  Vector index created (768-dim cosine)")
         except Exception as e:
-            # May fail on Neo4j < 5.x or if already exists
             if "already exists" not in str(e).lower():
                 print(f"  Note: {e}")
                 print("  (Vector search requires Neo4j 5.x+)")
 
-        # 4. Create full-text index for text search
+        # 4. Full-text index for keyword search
+        # Covers Fact.name and Fact.content — the properties actually written by neo4j_sync.py
         print("Creating full-text index...")
 
-        fulltext_index = """
-        CALL db.index.fulltext.createNodeIndex IF NOT EXISTS
-        ('fact_content', ['Fact'], ['content', 'summary'])
-        """
-
         try:
-            session.run(fulltext_index)
+            session.run("""
+                CREATE FULLTEXT INDEX fact_content IF NOT EXISTS
+                FOR (n:Fact) ON EACH [n.name, n.content]
+            """)
         except Exception as e:
             if "already exists" not in str(e).lower():
                 print(f"  Warning: {e}")
 
     print("\nSchema created successfully!")
 
+
 def verify_schema(driver):
     """Verify schema was created."""
 
     with driver.session() as session:
-        # Check constraints
         result = session.run("SHOW CONSTRAINTS")
         constraints = list(result)
         print(f"Constraints: {len(constraints)}")
 
-        # Check indexes
         result = session.run("SHOW INDEXES")
         indexes = list(result)
         print(f"Indexes: {len(indexes)}")
 
         # Check vector index (Neo4j 5.x+)
         try:
-            result = session.run("CALL db.indexes() YIELD name WHERE name CONTAINS 'vector' RETURN name")
+            result = session.run(
+                "SHOW INDEXES YIELD name WHERE name CONTAINS 'embedding' OR name CONTAINS 'vector' RETURN name"
+            )
             vector_indexes = list(result)
             if vector_indexes:
                 print(f"Vector indexes: {[v['name'] for v in vector_indexes]}")
-        except:
-            pass
+            else:
+                print("  Note: no vector index found (requires Neo4j 5.x+)")
+        except Exception as e:
+            print(f"  Warning: could not verify vector index: {e}")
+
 
 def main():
     uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -140,6 +140,7 @@ def main():
 
     finally:
         driver.close()
+
 
 if __name__ == "__main__":
     main()

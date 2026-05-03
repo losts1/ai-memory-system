@@ -9,10 +9,11 @@ Usage:
     python3 neo4j_sync.py [--full]
 """
 
+import fcntl
+import hashlib
+import json
 import os
 import sys
-import json
-import hashlib
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -24,6 +25,8 @@ from neo4j import GraphDatabase
 WORKSPACE = Path.home() / ".openclaw" / "workspace"
 MEMORY_DIR = WORKSPACE / "memory"
 STATE_FILE = MEMORY_DIR / "neo4j_sync_state.json"
+LOCK_FILE = MEMORY_DIR / ".neo4j_sync.lock"
+FACTS_PER_SESSION = 10
 
 
 def compute_file_hash(filepath: Path) -> str:
@@ -33,41 +36,47 @@ def compute_file_hash(filepath: Path) -> str:
 
 
 def load_sync_state() -> dict:
-    """Load last sync state."""
+    """Load last sync state. Returns empty state on corruption."""
     if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: corrupt state file ({e}), starting fresh", file=sys.stderr)
+            STATE_FILE.rename(STATE_FILE.with_suffix(".corrupt"))
     return {"files": {}}
 
 
 def save_sync_state(state: dict):
-    """Save sync state."""
+    """Save sync state atomically (write-to-tmp + rename)."""
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    tmp = STATE_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+    os.replace(tmp, STATE_FILE)
 
 
 def extract_facts(content: str, source: str) -> list:
     """
     Extract learnable facts from session content.
 
-    This is a simple extraction. For production, use an LLM to
-    identify key learnings and create structured Fact nodes.
+    Only starts a new fact on '## Learned:' headers.
+    '### ' sub-headers are treated as content within the current fact,
+    not as new facts — this prevents structural headers like
+    '### References' from creating garbage Fact nodes.
     """
     facts = []
-
-    # Look for "## Learned:" sections
     lines = content.split("\n")
     current_fact = None
 
     for line in lines:
-        if line.startswith("## Learned:") or line.startswith("### "):
+        if line.startswith("## Learned:"):
             if current_fact:
                 facts.append(current_fact)
             current_fact = {
-                "name": line.replace("## Learned:", "").replace("###", "").strip(),
+                "name": line.replace("## Learned:", "").strip(),
                 "content": "",
-                "source": source
+                "source": source,
             }
         elif current_fact:
             current_fact["content"] += line + "\n"
@@ -87,43 +96,67 @@ def sync_file(driver, filepath: Path, state: dict) -> dict:
     if not os.getenv("FULL_SYNC") and state["files"].get(relative_path) == file_hash:
         return {"status": "skipped", "file": relative_path}
 
-    # Read content
     with open(filepath) as f:
         content = f.read()
 
-    # Extract date from filename
-    date_match = filepath.stem[:10]  # YYYY-MM-DD
+    # Extract date from filename (YYYY-MM-DD prefix)
+    date_match = filepath.stem[:10]
     try:
         session_date = datetime.strptime(date_match, "%Y-%m-%d").isoformat()
-    except:
+    except ValueError:
         session_date = datetime.now().isoformat()
 
-    with driver.session() as session:
-        # Create/update Session node
-        cypher = """
-        MERGE (s:Session {id: $id})
-        SET s.date = $date, s.content = $content, s.updated = datetime()
-        RETURN s
-        """
-        session.run(cypher, id=relative_path, date=session_date, content=content[:5000])
-
-        # Extract and create Fact nodes
-        facts = extract_facts(content, relative_path)
-        for fact in facts[:10]:  # Limit to 10 facts per session
-            fact_id = f"{relative_path}:{fact['name']}"[:100]
-            cypher = """
-            MERGE (f:Fact {id: $id})
-            SET f.name = $name, f.content = $content, f.source = $source
-            MERGE (s:Session {id: $session_id})
-            MERGE (f)-[:LEARNED_IN]->(s)
+    with driver.session() as neo4j_session:
+        # Session node — no raw content stored; files are the source of truth
+        neo4j_session.run(
             """
-            session.run(cypher, id=fact_id, name=fact["name"],
-                       content=fact["content"][:2000], source=fact["source"],
-                       session_id=relative_path)
+            MERGE (s:Session {id: $id})
+            SET s.date = $date, s.source_file = $source_file, s.updated = datetime()
+            """,
+            id=relative_path,
+            date=session_date,
+            source_file=str(filepath),
+        )
 
-    # Update state
+        facts = extract_facts(content, relative_path)
+        synced_facts = facts[:FACTS_PER_SESSION]
+        dropped = len(facts) - len(synced_facts)
+
+        if dropped > 0:
+            print(
+                f"  Warning: {filepath.name} has {len(facts)} facts, "
+                f"only syncing first {FACTS_PER_SESSION}",
+                file=sys.stderr,
+            )
+
+        for fact in synced_facts:
+            # Hash-based ID: no truncation collisions
+            fact_id = hashlib.sha256(
+                f"{relative_path}:{fact['name']}".encode()
+            ).hexdigest()[:16]
+
+            neo4j_session.run(
+                """
+                MERGE (f:Fact {id: $id})
+                SET f.name = $name, f.content = $content, f.source = $source
+                WITH f
+                MATCH (s:Session {id: $session_id})
+                MERGE (f)-[:LEARNED_IN]->(s)
+                """,
+                id=fact_id,
+                name=fact["name"],
+                content=fact["content"][:2000],
+                source=fact["source"],
+                session_id=relative_path,
+            )
+
     state["files"][relative_path] = file_hash
-    return {"status": "synced", "file": relative_path, "facts": len(facts)}
+    return {
+        "status": "synced",
+        "file": relative_path,
+        "facts": len(synced_facts),
+        "dropped": dropped,
+    }
 
 
 def main():
@@ -135,6 +168,16 @@ def main():
         print("Error: NEO4J_PASSWORD not set")
         sys.exit(1)
 
+    # Prevent concurrent runs
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_fh = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Another sync instance is running, exiting.")
+        lock_fh.close()
+        sys.exit(0)
+
     print(f"Connecting to Neo4j at {uri}...")
     driver = GraphDatabase.driver(uri, auth=(username, password))
 
@@ -143,8 +186,8 @@ def main():
         synced = 0
         skipped = 0
         total_facts = 0
+        total_dropped = 0
 
-        # Process session files
         session_files = sorted(MEMORY_DIR.glob("*.md"), reverse=True)
 
         for filepath in session_files:
@@ -156,17 +199,25 @@ def main():
             if result["status"] == "synced":
                 synced += 1
                 total_facts += result.get("facts", 0)
-                print(f"  Synced: {filepath.name} ({result.get('facts', 0)} facts)")
+                total_dropped += result.get("dropped", 0)
+                msg = f"  Synced: {filepath.name} ({result['facts']} facts"
+                if result.get("dropped"):
+                    msg += f", {result['dropped']} dropped"
+                print(msg + ")")
             else:
                 skipped += 1
 
-        # Save state
         save_sync_state(state)
 
-        print(f"\nSync complete: {synced} files synced, {skipped} skipped, {total_facts} facts extracted")
+        summary = f"\nSync complete: {synced} files synced, {skipped} skipped, {total_facts} facts written"
+        if total_dropped:
+            summary += f" ({total_dropped} dropped — sessions with >{FACTS_PER_SESSION} facts)"
+        print(summary)
 
     finally:
         driver.close()
+        fcntl.flock(lock_fh, fcntl.LOCK_UN)
+        lock_fh.close()
 
 
 if __name__ == "__main__":
