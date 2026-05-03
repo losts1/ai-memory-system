@@ -25,6 +25,8 @@ import subprocess
 load_dotenv(Path.home() / ".openclaw" / "workspace" / ".env.neo4j")
 
 MEMORY_DIR = Path.home() / ".openclaw" / "workspace" / "memory"
+# Override with NEO4J_VECTOR_INDEX env var if your existing index has a different name
+VECTOR_INDEX = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
 
 
 def escape_lucene(query: str) -> str:
@@ -54,13 +56,13 @@ def search_neo4j_vector(query: str, max_results: int = 5):
         try:
             with driver.session() as session:
                 cypher = """
-                CALL db.index.vector.queryNodes('fact_embeddings', $k, $embedding)
+                CALL db.index.vector.queryNodes($vector_index, $k, $embedding)
                 YIELD node, score
                 RETURN node.id AS id, node.name AS name, node.content AS content, score
                 ORDER BY score DESC
                 LIMIT $k
                 """
-                result = session.run(cypher, k=max_results, embedding=embedding)
+                result = session.run(cypher, vector_index=VECTOR_INDEX, k=max_results, embedding=embedding)
                 results = []
                 for record in result:
                     results.append({
@@ -98,19 +100,22 @@ def search_neo4j_graph(query: str, max_results: int = 5):
         try:
             with driver.session() as session:
                 cypher = """
-                CALL db.index.fulltext.queryNodes('fact_content', $query)
+                CALL db.index.fulltext.queryNodes('fact_content', $lucene_query)
                 YIELD node, score
-                OPTIONAL MATCH (node)-[r]-(related:Fact)
+                OPTIONAL MATCH (node)-[:LEARNED_IN]->(s:Session)<-[:LEARNED_IN]-(related:Fact)
+                WHERE related.id <> node.id
                 RETURN node.id AS id, node.name AS name,
-                       score, collect(DISTINCT {rel: type(r), name: related.name}) AS relationships
+                       score, collect(DISTINCT related.name)[0..5] AS related_facts
                 ORDER BY score DESC
                 LIMIT $limit
                 """
-                result = session.run(cypher, query=lucene_query, limit=max_results)
+                # Note: use $lucene_query not $query — 'query' is a reserved kwarg
+                # in session.run(query_string, **params) and would cause a conflict
+                result = session.run(cypher, lucene_query=lucene_query, limit=max_results)
                 results = []
                 for record in result:
-                    rels = record["relationships"] if record["relationships"] else []
-                    rel_str = ", ".join([f"{r['rel']}: {r['name']}" for r in rels if r["name"]])
+                    related = record["related_facts"] if record["related_facts"] else []
+                    rel_str = ", ".join([r for r in related if r])
                     results.append({
                         "source": f"neo4j://Fact/{record['name']}",
                         "score": round(record["score"], 3),

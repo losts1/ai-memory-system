@@ -23,6 +23,9 @@ load_dotenv(Path.home() / ".openclaw" / "workspace" / ".env.neo4j")
 
 from neo4j import GraphDatabase
 
+# Must match NEO4J_VECTOR_INDEX in hybrid_memory_search.py (default: fact_embeddings)
+VECTOR_INDEX = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
+
 
 def create_schema(driver):
     """Create Neo4j schema for memory system."""
@@ -62,12 +65,12 @@ def create_schema(driver):
         print("Creating vector index...")
 
         try:
-            session.run("""
-                CREATE VECTOR INDEX fact_embeddings IF NOT EXISTS
-                FOR (n:Fact) ON (n.embedding)
-                OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}
-            """)
-            print("  Vector index created (768-dim cosine)")
+            session.run(
+                f"CREATE VECTOR INDEX {VECTOR_INDEX} IF NOT EXISTS "
+                "FOR (n:Fact) ON (n.embedding) "
+                "OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}"
+            )
+            print(f"  Vector index '{VECTOR_INDEX}' created (768-dim cosine)")
         except Exception as e:
             if "already exists" not in str(e).lower():
                 print(f"  Note: {e}")
@@ -104,7 +107,7 @@ def verify_schema(driver):
         # Check vector index (Neo4j 5.x+)
         try:
             result = session.run(
-                "SHOW INDEXES YIELD name WHERE name CONTAINS 'embedding' OR name CONTAINS 'vector' RETURN name"
+                "SHOW INDEXES YIELD name, type WHERE type = 'VECTOR' RETURN name"
             )
             vector_indexes = list(result)
             if vector_indexes:

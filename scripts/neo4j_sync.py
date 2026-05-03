@@ -27,6 +27,19 @@ MEMORY_DIR = WORKSPACE / "memory"
 STATE_FILE = MEMORY_DIR / "neo4j_sync_state.json"
 LOCK_FILE = MEMORY_DIR / ".neo4j_sync.lock"
 FACTS_PER_SESSION = 10
+EMBED_MODEL = "nomic-embed-text"
+
+
+def get_embedding(text: str) -> list | None:
+    """Generate embedding via Ollama. Returns None if Ollama is unavailable."""
+    try:
+        import ollama
+        response = ollama.embeddings(model=EMBED_MODEL, prompt=text[:2000])
+        return response["embedding"]
+    except Exception as e:
+        # Ollama may not be running — degrade gracefully, vector search won't work
+        # until embeddings are backfilled (re-run with --full once Ollama is available)
+        return None
 
 
 def compute_file_hash(filepath: Path) -> str:
@@ -40,10 +53,17 @@ def load_sync_state() -> dict:
     if STATE_FILE.exists():
         try:
             with open(STATE_FILE) as f:
-                return json.load(f)
+                data = json.load(f)
+            # Validate expected schema — other sync scripts may write different formats
+            if isinstance(data, dict) and "files" in data and isinstance(data["files"], dict):
+                return data
+            print("Warning: state file has unexpected schema, starting fresh", file=sys.stderr)
         except (json.JSONDecodeError, OSError) as e:
             print(f"Warning: corrupt state file ({e}), starting fresh", file=sys.stderr)
-            STATE_FILE.rename(STATE_FILE.with_suffix(".corrupt"))
+            try:
+                STATE_FILE.rename(STATE_FILE.with_suffix(".corrupt"))
+            except OSError:
+                pass
     return {"files": {}}
 
 
@@ -129,6 +149,7 @@ def sync_file(driver, filepath: Path, state: dict) -> dict:
                 file=sys.stderr,
             )
 
+        embedding_failures = 0
         for fact in synced_facts:
             # Hash-based ID: no truncation collisions
             fact_id = hashlib.sha256(
@@ -150,12 +171,25 @@ def sync_file(driver, filepath: Path, state: dict) -> dict:
                 session_id=relative_path,
             )
 
+            # Generate and store embedding for vector/semantic search
+            embed_text = f"{fact['name']} {fact['content'][:500]}"
+            embedding = get_embedding(embed_text)
+            if embedding:
+                neo4j_session.run(
+                    "MATCH (f:Fact {id: $id}) SET f.embedding = $embedding",
+                    id=fact_id,
+                    embedding=embedding,
+                )
+            else:
+                embedding_failures += 1
+
     state["files"][relative_path] = file_hash
     return {
         "status": "synced",
         "file": relative_path,
         "facts": len(synced_facts),
         "dropped": dropped,
+        "embed_failures": embedding_failures,
     }
 
 
@@ -189,6 +223,7 @@ def main():
         total_dropped = 0
 
         session_files = sorted(MEMORY_DIR.glob("*.md"), reverse=True)
+        total_embed_failures = 0
 
         for filepath in session_files:
             if filepath.name.startswith("."):
@@ -200,6 +235,7 @@ def main():
                 synced += 1
                 total_facts += result.get("facts", 0)
                 total_dropped += result.get("dropped", 0)
+                total_embed_failures += result.get("embed_failures", 0)
                 msg = f"  Synced: {filepath.name} ({result['facts']} facts"
                 if result.get("dropped"):
                     msg += f", {result['dropped']} dropped"
@@ -212,6 +248,8 @@ def main():
         summary = f"\nSync complete: {synced} files synced, {skipped} skipped, {total_facts} facts written"
         if total_dropped:
             summary += f" ({total_dropped} dropped — sessions with >{FACTS_PER_SESSION} facts)"
+        if total_embed_failures:
+            summary += f"\nWarning: {total_embed_failures} facts have no embedding — Ollama unavailable. Re-run with --full once Ollama is running."
         print(summary)
 
     finally:
