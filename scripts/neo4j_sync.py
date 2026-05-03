@@ -218,9 +218,9 @@ def main():
         sys.exit(0)
 
     print(f"Connecting to Neo4j at {uri}...")
-    driver = GraphDatabase.driver(uri, auth=(username, password))
-
+    driver = None
     try:
+        driver = GraphDatabase.driver(uri, auth=(username, password))
         state = load_sync_state()
         synced = 0
         skipped = 0
@@ -263,7 +263,8 @@ def main():
         print(summary)
 
     finally:
-        driver.close()
+        if driver is not None:
+            driver.close()
         fcntl.flock(lock_fh, fcntl.LOCK_UN)
         lock_fh.close()
 

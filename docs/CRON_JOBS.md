@@ -45,7 +45,7 @@ Autonomous learning sessions.
   "schedule": {"kind": "cron", "expr": "0 * * * *"},
   "payload": {
     "kind": "agentTurn",
-    "message": "Use the Learner skill to autonomously learn something new. IMPORTANT: First check the topic registry at memory/learner-topics.json to avoid duplicates. Pick a topic that addresses a Fleet-Wide Gap from MEMORY.md if possible. Research it briefly (5-15 min), write a session file that passes the quality gate (≥50 lines, ≥2 citations, fleet impact section). Update the topic registry after."
+    "message": "Use the Learner skill to autonomously learn something new. IMPORTANT: First check the topic registry at memory/learner-topics.json to avoid duplicates. Pick a topic from the curiosity queue or one that addresses a knowledge gap in MEMORY.md. Research it briefly (5-15 min), write a session file that passes the quality gate (≥50 lines, ≥2 citations, application section). Update the topic registry after."
   }
 }
 ```

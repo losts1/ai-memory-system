@@ -96,13 +96,13 @@ summary: "Max 200 chars"
 **Search:**
 ```bash
 # Hybrid search (Neo4j + files)
-python3 hybrid_memory_search.py "websocket staleness" --max-results 5
+python3 hybrid_memory_search.py "your topic" --max-results 5
 
 # With graph relationships
-python3 hybrid_memory_search.py "adverse selection" --graph
+python3 hybrid_memory_search.py "your topic" --graph
 
 # Files only
-python3 hybrid_memory_search.py "kraken" --files-only
+python3 hybrid_memory_search.py "your topic" --files-only
 ```
 
 ### Layer 5: FAISS Embeddings (not yet implemented)

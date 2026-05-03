@@ -6,7 +6,7 @@ The Learner system enables the AI agent to autonomously research topics during s
 
 ## How It Works
 
-1. **Topic Selection** — Checks `memory/curiosity-queue.md` or picks from Fleet-Wide Gaps
+1. **Topic Selection** — Checks `memory/curiosity-queue.md` or picks from knowledge gaps in MEMORY.md
 2. **Research** — Searches the web for academic papers, articles, documentation
 3. **Synthesis** — Extracts key concepts, creates structured summary
 4. **Quality Gate** — Validates session meets standards
@@ -24,7 +24,7 @@ The curiosity queue (`memory/curiosity-queue.md`) defines learning priorities:
 
 | Priority | Topic | Domain | Why It Matters |
 |----------|-------|--------|----------------|
-| 1 | Topic Name | Trading/Math | Application to fleet |
+| 1 | Topic Name | [Your domain] | [Why it matters to your work] |
 | 2 | ... | ... | ... |
 
 ## Recently Completed
@@ -42,7 +42,7 @@ Every learner session must pass:
 |-----------|---------|
 | Lines | ≥50 |
 | Citations | ≥2 |
-| Fleet impact section | Required |
+| Application section | Required |
 | Structure | Organized with headers |
 
 ## Session Format
@@ -64,8 +64,8 @@ Every learner session must pass:
 ## Mathematical Foundation
 [Formulas, equations if applicable]
 
-## Fleet Impact
-[How this applies to the trading bots]
+## Application
+[How this applies to your work or use case]
 
 ## References
 1. [Citation]
@@ -84,14 +84,14 @@ Every learner session must pass:
   "schedule": {"kind": "cron", "expr": "0 * * * *"},
   "payload": {
     "kind": "agentTurn",
-    "message": "Use the Learner skill to autonomously learn something new. IMPORTANT: First check the topic registry at memory/learner-topics.json to avoid duplicates. Pick a topic that addresses a Fleet-Wide Gap from MEMORY.md if possible. Research it briefly (5-15 min), write a session file that passes the quality gate (≥50 lines, ≥2 citations, fleet impact section). Update the topic registry after."
+    "message": "Use the Learner skill to autonomously learn something new. IMPORTANT: First check the topic registry at memory/learner-topics.json to avoid duplicates. Pick a topic from the curiosity queue or one that addresses a knowledge gap in MEMORY.md. Research it briefly (5-15 min), write a session file that passes the quality gate (≥50 lines, ≥2 citations, application section). Update the topic registry after."
   }
 }
 ```
 
 ## Topic Prioritization
 
-1. **Fleet-Wide Gaps** — Issues affecting multiple trading bots
+1. **Knowledge Gaps** — Topics flagged as unknown/incomplete in MEMORY.md
 2. **Curiosity Queue** — User-defined learning priorities
 3. **Follow-ups** — Topics referenced but not yet explored
 4. **Random** — Serendipitous exploration
@@ -103,13 +103,13 @@ Learner sessions contribute to `MEMORY.md` during distillation:
 1. **Heartbeat** checks recent learner sessions
 2. **Distills** key insights into MEMORY.md
 3. **References** the learner session file
-4. **Updates** Fleet-Wide Gaps if applicable
+4. **Updates** knowledge gaps section if applicable
 
 Example MEMORY.md entry:
 
 ```markdown
-### Queue Position
-Moallemi-Yuan 2016: front-of-queue ≈0.26 ticks above average. Queue position IS adverse selection filter. Garriott 2025: inventory shocks reduce later-in-queue liquidity. [Learner: 2026-05-03_12-01]
+### [Topic Name]
+[Author Year]: [Key finding — 1 sentence]. [Author Year]: [Supporting finding]. [Learner: YYYY-MM-DD_HH-MM]
 ```
 
 ## Integration with Neo4j
@@ -132,13 +132,13 @@ Creates:
 
 ```bash
 # Semantic search
-python3 hybrid_memory_search.py "adverse selection" --max-results 5
+python3 hybrid_memory_search.py "your topic" --max-results 5
 
-# With relationships
-python3 hybrid_memory_search.py "market making" --graph
+# With co-learned relationships
+python3 hybrid_memory_search.py "your topic" --graph
 
 # Files only
-python3 hybrid_memory_search.py "fill probability" --files-only
+python3 hybrid_memory_search.py "your topic" --files-only
 ```
 
 ---
@@ -149,15 +149,15 @@ python3 hybrid_memory_search.py "fill probability" --files-only
 > Use the Learner skill to autonomously learn something new...
 
 **Process:**
-1. Check `memory/curiosity-queue.md` — next topic is "Queue Position Valuation"
-2. Search web for academic papers on queue position in limit order books
-3. Find Moallemi-Yuan 2016, Garriott et al. 2025
-4. Synthesize key findings
+1. Check `memory/curiosity-queue.md` — next topic is "Python asyncio internals"
+2. Search web for documentation, articles, and blog posts on the topic
+3. Find Python docs, relevant PEPs, and technical writeups
+4. Synthesize key findings into structured notes
 5. Write session file with citations
 
-**Output:** `memory/learner-sessions/2026-05-03_12-01_queue-position-valuation.md`
+**Output:** `memory/learner-sessions/YYYY-MM-DD_HH-MM_python-asyncio-internals.md`
 
-**Synced to Neo4j:** Creates `Fact` nodes for "Queue Position Valuation", "Moallemi-Yuan Model", "Garriott Crowding-Out", with relationships.
+**Synced to Neo4j:** Creates `Fact` nodes for each `## Learned:` section, linked to the session file via `LEARNED_IN` relationships.
 
 ---
 
@@ -167,7 +167,7 @@ python3 hybrid_memory_search.py "fill probability" --files-only
 
 Modify the cron job message to change topic sources:
 
-- **From Fleet-Wide Gaps:** "Pick a topic from MEMORY.md Fleet-Wide Gaps"
+- **From knowledge gaps:** "Pick a topic flagged as a knowledge gap in MEMORY.md"
 - **From Curiosity Queue:** "Check memory/curiosity-queue.md"
 - **Specific Domain:** "Pick a topic in [domain]"
 
@@ -177,7 +177,7 @@ Change minimum thresholds:
 
 - **Lines:** ≥50 (more detail)
 - **Citations:** ≥2 (academic rigor)
-- **Fleet impact:** Required (applied learning)
+- **Application:** Required (applied learning — how does this connect to your work?)
 
 ### Session Frequency
 

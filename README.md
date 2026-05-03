@@ -167,7 +167,7 @@ See `docs/ARCHITECTURE.md` for detailed design.
 
 Edit the templates to reflect your use case:
 
-- **Trading bots:** Fleet-Wide Gaps, market making topics
+- **Trading bots:** Market research, strategy notes, knowledge gaps
 - **Research:** Paper tracking, citation management
 - **Personal:** Calendar, contacts, projects
 - **Work:** Team members, processes, tools
@@ -258,4 +258,4 @@ MIT License — Use freely for personal or commercial projects.
 
 ## Credits
 
-Based on the Nova memory system (2025-2026). Architecture evolved through production use for AI-assisted trading bot management.
+Architecture evolved through production use of an AI assistant with persistent memory requirements.
