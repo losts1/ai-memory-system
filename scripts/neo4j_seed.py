@@ -70,7 +70,21 @@ def create_schema(driver):
                 "FOR (n:Fact) ON (n.embedding) "
                 "OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}"
             )
-            print(f"  Vector index '{VECTOR_INDEX}' created (768-dim cosine)")
+            # IF NOT EXISTS silently skips creation when another vector index already
+            # exists on the same (label, property) — verify the index is actually there
+            result = session.run(
+                "SHOW INDEXES YIELD name, type WHERE type = 'VECTOR' RETURN name"
+            )
+            vector_names = [r["name"] for r in result]
+            if VECTOR_INDEX in vector_names:
+                print(f"  Vector index '{VECTOR_INDEX}' ready (768-dim cosine)")
+            else:
+                print(f"  Note: '{VECTOR_INDEX}' was not created (IF NOT EXISTS skipped it)")
+                if vector_names:
+                    print(f"  Existing vector index(es): {vector_names}")
+                    print(f"  Set NEO4J_VECTOR_INDEX={vector_names[0]} in .env.neo4j to use existing index")
+                else:
+                    print("  (Vector search requires Neo4j 5.x+)")
         except Exception as e:
             if "already exists" not in str(e).lower():
                 print(f"  Note: {e}")

@@ -10,7 +10,7 @@ The AI Memory System is a **5-layer hybrid architecture** combining:
 | 2 | `memory/*.md` | Raw session logs | Every session |
 | 3 | `memory/sessions/*.qmd` | Structured QMD summaries | Daily (cron) |
 | 4 | Neo4j | Knowledge graph + vector search | 30-min sync |
-| 5 | FAISS | Local semantic embeddings | On-demand |
+| 5 | FAISS | Local semantic embeddings (not yet implemented) | On-demand |
 
 ## Layer Details
 
@@ -80,10 +80,13 @@ summary: "Max 200 chars"
 **What it is:** Persistent relational memory with vector search.
 
 **Schema:**
-- `Fact` nodes — Learned topics with embeddings
-- `Session` nodes — Raw session logs
-- `Topic` nodes — Category tags
-- Relationships — `LEARNED_IN`, `RELATED_TO`, `PREREQUISITE_OF`
+- `Fact` nodes — Learned topics with 768-dim embeddings (`nomic-embed-text`)
+- `Session` nodes — Source file pointers (no raw content stored)
+- Relationships — `LEARNED_IN` (Fact → Session)
+
+**Indexes:**
+- Vector index `fact_embeddings` — semantic similarity on `Fact.embedding`
+- Fulltext index `fact_content` — keyword search on `Fact.name` + `Fact.content`
 
 **Sync jobs:**
 - Every 30 min: Sessions → Graph
@@ -102,13 +105,15 @@ python3 hybrid_memory_search.py "adverse selection" --graph
 python3 hybrid_memory_search.py "kraken" --files-only
 ```
 
-### Layer 5: FAISS Embeddings
+### Layer 5: FAISS Embeddings (not yet implemented)
 
-**What it is:** Local semantic search fallback when Neo4j is unavailable.
+**What it is:** Planned local semantic search fallback when Neo4j is unavailable.
 
-**Location:** `memory/embeddings/`
+**Location:** `memory/embeddings/` (reserved, not yet used)
 
 **Model:** `nomic-embed-text` (768-dim, local Ollama)
+
+**Note:** This layer is not yet implemented in the current package. Semantic search currently runs entirely through Neo4j's vector index (Layer 4).
 
 ---
 

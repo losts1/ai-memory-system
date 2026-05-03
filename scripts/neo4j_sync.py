@@ -126,62 +126,67 @@ def sync_file(driver, filepath: Path, state: dict) -> dict:
     except ValueError:
         session_date = datetime.now().isoformat()
 
-    with driver.session() as neo4j_session:
-        # Session node — no raw content stored; files are the source of truth
-        neo4j_session.run(
-            """
-            MERGE (s:Session {id: $id})
-            SET s.date = $date, s.source_file = $source_file, s.updated = datetime()
-            """,
-            id=relative_path,
-            date=session_date,
-            source_file=str(filepath),
+    facts = extract_facts(content, relative_path)
+    synced_facts = facts[:FACTS_PER_SESSION]
+    dropped = len(facts) - len(synced_facts)
+
+    if dropped > 0:
+        print(
+            f"  Warning: {filepath.name} has {len(facts)} facts, "
+            f"only syncing first {FACTS_PER_SESSION}",
+            file=sys.stderr,
         )
 
-        facts = extract_facts(content, relative_path)
-        synced_facts = facts[:FACTS_PER_SESSION]
-        dropped = len(facts) - len(synced_facts)
-
-        if dropped > 0:
-            print(
-                f"  Warning: {filepath.name} has {len(facts)} facts, "
-                f"only syncing first {FACTS_PER_SESSION}",
-                file=sys.stderr,
-            )
-
-        embedding_failures = 0
-        for fact in synced_facts:
-            # Hash-based ID: no truncation collisions
-            fact_id = hashlib.sha256(
-                f"{relative_path}:{fact['name']}".encode()
-            ).hexdigest()[:16]
-
+    try:
+        with driver.session() as neo4j_session:
+            # Session node — no raw content stored; files are the source of truth
             neo4j_session.run(
                 """
-                MERGE (f:Fact {id: $id})
-                SET f.name = $name, f.content = $content, f.source = $source
-                WITH f
-                MATCH (s:Session {id: $session_id})
-                MERGE (f)-[:LEARNED_IN]->(s)
+                MERGE (s:Session {id: $id})
+                SET s.date = $date, s.source_file = $source_file, s.updated = datetime()
                 """,
-                id=fact_id,
-                name=fact["name"],
-                content=fact["content"][:2000],
-                source=fact["source"],
-                session_id=relative_path,
+                id=relative_path,
+                date=session_date,
+                source_file=str(filepath),
             )
 
-            # Generate and store embedding for vector/semantic search
-            embed_text = f"{fact['name']} {fact['content'][:500]}"
-            embedding = get_embedding(embed_text)
-            if embedding:
+            embedding_failures = 0
+            for fact in synced_facts:
+                # Hash-based ID: no truncation collisions
+                fact_id = hashlib.sha256(
+                    f"{relative_path}:{fact['name']}".encode()
+                ).hexdigest()[:16]
+
                 neo4j_session.run(
-                    "MATCH (f:Fact {id: $id}) SET f.embedding = $embedding",
+                    """
+                    MERGE (f:Fact {id: $id})
+                    SET f.name = $name, f.content = $content, f.source = $source
+                    WITH f
+                    MATCH (s:Session {id: $session_id})
+                    MERGE (f)-[:LEARNED_IN]->(s)
+                    """,
                     id=fact_id,
-                    embedding=embedding,
+                    name=fact["name"],
+                    content=fact["content"][:2000],
+                    source=fact["source"],
+                    session_id=relative_path,
                 )
-            else:
-                embedding_failures += 1
+
+                # Generate and store embedding for vector/semantic search
+                embed_text = f"{fact['name']} {fact['content'][:500]}"
+                embedding = get_embedding(embed_text)
+                if embedding:
+                    neo4j_session.run(
+                        "MATCH (f:Fact {id: $id}) SET f.embedding = $embedding",
+                        id=fact_id,
+                        embedding=embedding,
+                    )
+                else:
+                    embedding_failures += 1
+
+    except Exception as e:
+        print(f"  Error syncing {filepath.name}: {e}", file=sys.stderr)
+        return {"status": "error", "file": relative_path, "error": str(e)}
 
     state["files"][relative_path] = file_hash
     return {
@@ -219,6 +224,7 @@ def main():
         state = load_sync_state()
         synced = 0
         skipped = 0
+        errors = 0
         total_facts = 0
         total_dropped = 0
 
@@ -240,12 +246,16 @@ def main():
                 if result.get("dropped"):
                     msg += f", {result['dropped']} dropped"
                 print(msg + ")")
+            elif result["status"] == "error":
+                errors += 1
             else:
                 skipped += 1
 
         save_sync_state(state)
 
         summary = f"\nSync complete: {synced} files synced, {skipped} skipped, {total_facts} facts written"
+        if errors:
+            summary += f", {errors} errors (check stderr)"
         if total_dropped:
             summary += f" ({total_dropped} dropped — sessions with >{FACTS_PER_SESSION} facts)"
         if total_embed_failures:

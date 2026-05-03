@@ -76,7 +76,7 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
    # Create Python venv
    python3 -m venv ~/.openclaw/workspace/neo4j-venv
    source ~/.openclaw/workspace/neo4j-venv/bin/activate
-   pip install neo4j python-dotenv ollama
+   pip install -r requirements.txt
 
    # Initialize schema (Neo4j must be running first)
    python3 ~/.openclaw/workspace/scripts/neo4j_seed.py
@@ -144,7 +144,7 @@ redistribute/
 | 2 | `memory/*.md` | Raw session logs |
 | 3 | `memory/sessions/*.qmd` | Structured QMD summaries |
 | 4 | Neo4j | Knowledge graph + vector search |
-| 5 | FAISS | Local semantic embeddings |
+| 5 | FAISS | Local semantic embeddings (not yet implemented) |
 
 See `docs/ARCHITECTURE.md` for detailed design.
 

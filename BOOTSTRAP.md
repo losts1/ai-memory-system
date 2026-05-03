@@ -80,7 +80,7 @@ Create these in `~/.openclaw/workspace/memory/core/`:
    ```bash
    python3 -m venv ~/.openclaw/workspace/neo4j-venv
    source ~/.openclaw/workspace/neo4j-venv/bin/activate
-   pip install neo4j python-dotenv ollama
+   pip install -r requirements.txt
    ```
 
 4. Initialize schema (Neo4j must be running first):

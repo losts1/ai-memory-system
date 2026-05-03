@@ -30,7 +30,7 @@ Syncs raw session logs to the knowledge graph.
   "schedule": {"kind": "every", "everyMs": 1800000},
   "payload": {
     "kind": "agentTurn",
-    "message": "Run Neo4j session sync:\n\nUSE_LLM_SUMMARY=false python3 ~/.openclaw/workspace/neo4j_auto_sync.py\n\nReport number of new sessions synced. If none, respond briefly."
+    "message": "Run Neo4j session sync:\n\n```bash\nsource ~/.openclaw/workspace/neo4j-venv/bin/activate\npython3 ~/.openclaw/workspace/scripts/neo4j_sync.py\n```\n\nReport number of new sessions synced, including any errors. If none, respond briefly."
   }
 }
 ```
@@ -91,7 +91,7 @@ Removes stale subagent sessions.
   "schedule": {"kind": "every", "everyMs": 21600000},
   "payload": {
     "kind": "agentTurn",
-    "message": "Run session cleanup:\npython3 ~/.openclaw/workspace/skills/public/submind/scripts/session_cleanup.py --ttl-hours 4 --test-ttl-hours 0.5 --max-cleanup 20",
+    "message": "Run session cleanup to remove stale subagent sessions older than 4 hours. Adapt the path to your submind skill's session_cleanup.py script, or skip this job if you don't use the submind skill.",
     "timeoutSeconds": 60
   }
 }
@@ -126,7 +126,7 @@ Backs up Neo4j and commits changes.
   "schedule": {"kind": "cron", "expr": "0 3 * * *", "tz": "America/New_York"},
   "payload": {
     "kind": "agentTurn",
-    "message": "Backup Neo4j and check in:\n\n1. Neo4j Backup:\n```bash\n~/.openclaw/workspace/scripts/backup-neo4j.sh\n```\n\n2. Workspace Check-in:\n```bash\ncd ~/.openclaw/workspace\ngit add -A\ngit diff --cached --stat\ngit commit -m \"Nightly check-in $(date +%Y-%m-%d)\" || echo \"No changes\"\ngit push origin master 2>/dev/null || echo \"Push skipped\"\n```\n\nReport: backup size, commits made, any errors. If all succeeded, respond briefly.",
+    "message": "Backup Neo4j and check in:\n\n1. Neo4j Backup (Docker-based install):\n```bash\nBACKUP_DIR=\"$HOME/.openclaw/neo4j-backups\"\nDATE=$(date +%Y-%m-%d)\nmkdir -p \"$BACKUP_DIR\"\ndocker cp neo4j:/data \"$BACKUP_DIR/neo4j-data-$DATE\" && echo \"Backup: $BACKUP_DIR/neo4j-data-$DATE\" || echo \"Backup failed\"\n```\n\n2. Workspace Check-in:\n```bash\ncd ~/.openclaw/workspace\ngit add -A\ngit diff --cached --stat\ngit commit -m \"Nightly check-in $(date +%Y-%m-%d)\" || echo \"No changes\"\ngit push origin master 2>/dev/null || echo \"Push skipped\"\n```\n\nReport: backup size, commits made, any errors. If all succeeded, respond briefly.",
     "timeoutSeconds": 300
   }
 }

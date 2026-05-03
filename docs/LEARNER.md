@@ -114,17 +114,19 @@ Moallemi-Yuan 2016: front-of-queue ≈0.26 ticks above average. Queue position I
 
 ## Integration with Neo4j
 
-Learner sessions sync to the knowledge graph:
+Learner sessions sync to the knowledge graph via the standard sync script.
+Learner session files follow the same `## Learned:` header format as daily logs,
+so `neo4j_sync.py` picks them up automatically:
 
 ```bash
-# Every 30 minutes
-python3 ~/.openclaw/workspace/neo4j_learn_sync.py
+# Run manually or via the Neo4j Session Sync cron job
+source ~/.openclaw/workspace/neo4j-venv/bin/activate
+python3 ~/.openclaw/workspace/scripts/neo4j_sync.py
 ```
 
 Creates:
-- `Fact` nodes for each learned concept
-- `LEARNED_IN` relationships to session
-- `RELATED_TO` relationships between concepts
+- `Fact` nodes for each `## Learned:` section
+- `LEARNED_IN` relationships linking Facts to their source Session
 
 ## Searching Learned Topics
 
@@ -212,4 +214,4 @@ Change cron expression:
 | `memory/curiosity-queue.md` | Topic priorities |
 | `memory/learner-topics.json` | Topic registry |
 | `memory/learner-sessions/*.md` | Session outputs |
-| `scripts/neo4j_learn_sync.py` | Sync to knowledge graph |
+| `scripts/neo4j_sync.py` | Sync all session files to knowledge graph |
