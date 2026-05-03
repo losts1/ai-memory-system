@@ -1,3 +1,4 @@
 neo4j>=5.0
 python-dotenv>=1.0
 ollama>=0.1
+faiss-cpu>=1.7

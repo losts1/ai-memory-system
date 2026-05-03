@@ -10,7 +10,7 @@ The AI Memory System is a **5-layer hybrid architecture** combining:
 | 2 | `memory/*.md` | Raw session logs | Every session |
 | 3 | `memory/sessions/*.qmd` | Structured QMD summaries | Daily (cron) |
 | 4 | Neo4j | Knowledge graph + vector search | 30-min sync |
-| 5 | FAISS | Local semantic embeddings (not yet implemented) | On-demand |
+| 5 | FAISS | Local semantic embeddings (offline fallback) | On-demand |
 
 ## Layer Details
 
@@ -105,15 +105,15 @@ python3 hybrid_memory_search.py "your topic" --graph
 python3 hybrid_memory_search.py "your topic" --files-only
 ```
 
-### Layer 5: FAISS Embeddings (not yet implemented)
+### Layer 5: FAISS Embeddings
 
-**What it is:** Planned local semantic search fallback when Neo4j is unavailable.
+**What it is:** Local semantic search fallback when Neo4j is unavailable.
 
-**Location:** `memory/embeddings/` (reserved, not yet used)
+**Location:** `memory/embeddings/faiss.index` + `memory/embeddings/faiss_meta.pkl`
 
 **Model:** `nomic-embed-text` (768-dim, local Ollama)
 
-**Note:** This layer is not yet implemented in the current package. Semantic search currently runs entirely through Neo4j's vector index (Layer 4).
+**Usage:** Pass `--use-embeddings` to `hybrid_memory_search.py` to search the local FAISS index instead of Neo4j's vector index. Returns L2 distance scores (lower = more similar). Requires `faiss-cpu` (`pip install faiss-cpu`).
 
 ---
 

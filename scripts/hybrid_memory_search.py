@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Hybrid Memory Search - Neo4j Vector + Graph + File Search
+Hybrid Memory Search - Neo4j Vector + Graph + FAISS + File Search
 
 Searches across:
 1. Neo4j vector index (semantic similarity via Fact embeddings)
 2. Neo4j knowledge graph (fulltext + relationships)
-3. Memory files (grep fallback)
+3. FAISS local index (offline semantic search, Layer 5)
+4. Memory files (grep fallback)
 
 Usage:
     python3 hybrid_memory_search.py "your query" --max-results 5
     python3 hybrid_memory_search.py "your query" --graph --max-results 5
+    python3 hybrid_memory_search.py "your query" --use-embeddings
     python3 hybrid_memory_search.py "your query" --files-only
 """
 
@@ -27,6 +29,9 @@ load_dotenv(Path.home() / ".openclaw" / "workspace" / ".env.neo4j")
 MEMORY_DIR = Path.home() / ".openclaw" / "workspace" / "memory"
 # Override with NEO4J_VECTOR_INDEX env var if your existing index has a different name
 VECTOR_INDEX = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
+
+INDEX_PATH = MEMORY_DIR / "embeddings" / "faiss.index"
+META_PATH = MEMORY_DIR / "embeddings" / "faiss_meta.pkl"
 
 
 def escape_lucene(query: str) -> str:
@@ -176,6 +181,41 @@ def search_files(query: str, max_results: int = 5):
     return results
 
 
+def search_faiss(query: str, max_results: int = 5):
+    """Search local FAISS index for semantic similarity (Layer 5 — offline fallback)."""
+    if not INDEX_PATH.exists() or not META_PATH.exists():
+        return []
+
+    try:
+        import faiss
+        import numpy as np
+        import pickle
+        import ollama
+
+        embedding = ollama.embeddings(model="nomic-embed-text", prompt=query)["embedding"]
+
+        index = faiss.read_index(str(INDEX_PATH))
+        with open(META_PATH, "rb") as f:
+            meta = pickle.load(f)
+
+        q = np.array([embedding], dtype=np.float32)
+        distances, indices = index.search(q, max_results)
+
+        return [
+            {
+                "source": meta[i]["source"],
+                "score": float(distances[0][j]),
+                "name": meta[i]["name"],
+            }
+            for j, i in enumerate(indices[0])
+            if i != -1
+        ]
+
+    except Exception as e:
+        print(f"FAISS search error: {e}", file=sys.stderr)
+        return []
+
+
 def format_output(results: list, query_type: str):
     """Format results for display."""
     if not results:
@@ -201,6 +241,8 @@ def main():
     parser.add_argument("--max-results", "-n", type=int, default=5, help="Max results per source")
     parser.add_argument("--graph", action="store_true", help="Include graph relationships")
     parser.add_argument("--files-only", action="store_true", help="Only search files")
+    parser.add_argument("--use-embeddings", action="store_true",
+                        help="Use local FAISS index instead of Neo4j vector search")
 
     args = parser.parse_args()
 
@@ -209,10 +251,15 @@ def main():
         format_output(results, "Files")
         return
 
-    # Neo4j vector search
-    print("Semantic result (Neo4j Vector)")
-    vector_results = search_neo4j_vector(args.query, args.max_results)
-    format_output(vector_results, "Neo4j Vector")
+    # Semantic search — FAISS (local) or Neo4j vector
+    if args.use_embeddings:
+        print("Semantic result (FAISS Local)")
+        semantic_results = search_faiss(args.query, args.max_results)
+        format_output(semantic_results, "FAISS")
+    else:
+        print("Semantic result (Neo4j Vector)")
+        semantic_results = search_neo4j_vector(args.query, args.max_results)
+        format_output(semantic_results, "Neo4j Vector")
 
     # Graph search (if requested)
     if args.graph:

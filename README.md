@@ -144,7 +144,7 @@ redistribute/
 | 2 | `memory/*.md` | Raw session logs |
 | 3 | `memory/sessions/*.qmd` | Structured QMD summaries |
 | 4 | Neo4j | Knowledge graph + vector search |
-| 5 | FAISS | Local semantic embeddings (not yet implemented) |
+| 5 | FAISS | Local semantic embeddings (offline fallback) |
 
 See `docs/ARCHITECTURE.md` for detailed design.
 
