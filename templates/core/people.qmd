@@ -1,0 +1,25 @@
+---
+id: people
+type: person
+tags: [person, private]
+created: [DATE]
+updated: "[DATETIME]"
+version: 1.0
+priority: high
+status: active
+access: private
+summary: "People I know — private context"
+---
+
+# People
+
+## [Person Name]
+
+- **Relationship:** [e.g., primary user, colleague, friend]
+- **Context:** [What they're working on, what they care about]
+- **Communication style:** [How they prefer to communicate]
+- **Timezone:** [TZ]
+
+---
+
+_Add people as you learn about them. Keep entries concise but actionable._

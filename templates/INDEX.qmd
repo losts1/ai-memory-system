@@ -1,0 +1,101 @@
+---
+id: memory-index
+created: [DATE]
+updated: "[DATETIME]"
+v: 1.0
+type: index
+priority: high
+status: active
+tags:
+  - memory
+  - memory-system
+  - qmd
+description: "Master index for the QMD memory system"
+---
+
+# Memory Index
+
+Quick reference to all memory entries. Start here for fast lookups.
+
+## Structure (CODE-Aligned)
+
+```
+memory/
+├── INDEX.qmd          # This file - master index
+├── inbox/             # Capture - raw incoming info
+├── core/              # Organize - curated knowledge
+│   ├── identity.qmd   # Who I am
+│   ├── people.qmd     # People I know
+│   ├── preferences.qmd # Workflow preferences
+│   └── setup.qmd      # Environment setup
+├── sessions/          # Distill - daily logs (QMD summaries)
+│   └── YYYY-MM-DD.qmd
+├── projects/          # Express - outputs and actions
+│   └── [project].qmd
+├── archive/           # Legacy files
+├── learner-sessions/  # Autonomous learning outputs
+└── *.md               # Raw session logs (auto-generated)
+```
+
+## Core Knowledge (High Priority)
+
+| ID | File | Tags | Summary |
+|----|------|------|---------|
+| identity-[name] | core/identity.qmd | identity | [Your identity] |
+| people | core/people.qmd | person, private | People I know |
+| prefs | core/preferences.qmd | preferences | Workflow preferences |
+| setup | core/setup.qmd | setup | Environment setup |
+
+## Recent Sessions
+
+| Date | File | Key Events |
+|------|------|------------|
+| [DATE] | sessions/[DATE].qmd | [Brief summary] |
+
+## Inbox Status
+
+✅ **Empty** - All items processed.
+
+## Lessons Learned
+
+See `memory/lessons.md` for process corrections:
+- [DATE]: [Lesson learned]
+
+## YAML Schema
+
+All QMD files follow this schema:
+
+```yaml
+---
+id: unique-slug           # Required: unique identifier
+type: identity|person|preferences|setup|session|project
+tags: [array, of, tags]   # Required: categorization
+created: YYYY-MM-DD       # Required
+updated: "YYYY-MM-DDTHH:MM:SS"  # ISO timestamp
+version: 1.0              # Track changes
+priority: low|medium|high # Load order
+status: active|completed|on-hold|draft
+access: public|private    # For sensitive data
+related: [array, of, files]
+summary: "Max 200 chars"  # Brief description
+---
+```
+
+## Quick Links
+
+- [[core/identity.qmd]] - Who I am
+- [[core/people.qmd]] - People directory
+- [[core/preferences.qmd]] - Preferences
+- [[core/setup.qmd]] - Setup notes
+- [[sessions/]] - Session logs
+- [[inbox/]] - Capture zone
+
+## Search Tags
+
+- `#identity` - Identity/role info
+- `#person` - People cards
+- `#setup` - Environment/setup
+- `#preferences` - Workflow preferences
+- `#session` - Session logs
+- `#project` - Active projects
+- `#private` - Sensitive data (people.qmd)

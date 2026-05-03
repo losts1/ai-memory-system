@@ -1,0 +1,39 @@
+---
+id: preferences
+type: preferences
+tags: [preferences, workflow]
+created: [DATE]
+updated: "[DATETIME]"
+version: 1.0
+priority: medium
+status: active
+summary: "How I work — workflow preferences"
+---
+
+# Preferences
+
+## Communication
+
+- **Response style:** [e.g., concise, detailed, casual]
+- **Format:** [e.g., tables, bullet points, prose]
+- **Language:** [Primary language]
+
+## Workflow
+
+- **Ask vs Act:** [When to ask permission vs act autonomously]
+- **Risk tolerance:** [LOW/MEDIUM/HIGH tasks that need approval]
+- **Check-ins:** [How often to proactively check in]
+
+## Memory
+
+- **Distillation frequency:** [How often to distill MEMORY.md]
+- **Archive policy:** [When to archive old session logs]
+
+## Tools
+
+- **Preferred models:** [Which models for which tasks]
+- **Search:** [How to search memory]
+
+---
+
+_Update as you learn what works._
