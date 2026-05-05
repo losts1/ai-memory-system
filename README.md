@@ -226,19 +226,6 @@ cron list  # Check job status
 
 ---
 
-## Files Reference
-
-| File | When to Read | When to Write |
-|------|-------------|---------------|
-| `SOUL.md` | Every session start | Identity changes |
-| `USER.md` | Every session start | User context updates |
-| `MEMORY.md` | Main session start | Distill learnings weekly |
-| `HEARTBEAT.md` | On heartbeat poll | Add periodic tasks |
-| `TOOLS.md` | Need local config | New tools/paths |
-| `memory/YYYY-MM-DD.md` | Session start | Throughout session |
-
----
-
 ## Contributing
 
 This is a template package. Customize for your own use case.

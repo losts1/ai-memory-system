@@ -67,10 +67,6 @@ Every learner session must pass:
 ## Application
 [How this applies to your work or use case]
 
-## References
-1. [Citation]
-2. [Citation]
-
 ## Related Topics
 - [[Related Topic 1]]
 - [[Related Topic 2]]

@@ -137,19 +137,6 @@ python3 ~/.openclaw/workspace/hybrid_memory_search.py "your query" --files-only
 
 ---
 
-## Key Files Reference
-
-| File | When to Read | When to Write |
-|------|-------------|---------------|
-| `SOUL.md` | Every session start | Identity changes |
-| `USER.md` | Every session start | User context updates |
-| `MEMORY.md` | Main session start | Distill learnings weekly |
-| `HEARTBEAT.md` | On heartbeat poll | Add periodic tasks |
-| `TOOLS.md` | Need local config | New tools/paths |
-| `memory/YYYY-MM-DD.md` | Session start | Throughout session |
-
----
-
 ## Troubleshooting
 
 **Neo4j connection failed**: Check `docker ps`, ensure Neo4j is running
