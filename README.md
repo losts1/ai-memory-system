@@ -22,7 +22,7 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
 
 ### Prerequisites
 
-- OpenClaw installed and configured
+- An AI agent with tool-use capability (e.g., Claude Code, a custom agent framework)
 - Python 3.9+
 - Neo4j 5.x+ (Docker recommended)
 - Ollama with `nomic-embed-text` model
@@ -31,25 +31,25 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
 
 1. **Create the directory structure:**
    ```bash
-   mkdir -p ~/.openclaw/workspace/memory/{core,sessions,inbox,archive,learner-sessions,embeddings,projects}
+   mkdir -p ~/.ai-memory/memory/{core,sessions,inbox,archive,learner-sessions,embeddings,projects}
    ```
 
 2. **Copy templates to workspace:**
    ```bash
-   cp -r templates/* ~/.openclaw/workspace/
-   cp -r templates/core/* ~/.openclaw/workspace/memory/core/
-   cp templates/INDEX.qmd ~/.openclaw/workspace/memory/
+   cp -r templates/* ~/.ai-memory/
+   cp -r templates/core/* ~/.ai-memory/memory/core/
+   cp templates/INDEX.qmd ~/.ai-memory/memory/
    ```
 
 3. **Copy scripts to workspace:**
    ```bash
-   cp -r scripts ~/.openclaw/workspace/
-   chmod +x ~/.openclaw/workspace/scripts/*.py
+   cp -r scripts ~/.ai-memory/
+   chmod +x ~/.ai-memory/scripts/*.py
    ```
 
 4. **Copy documentation:**
    ```bash
-   cp -r docs ~/.openclaw/workspace/
+   cp -r docs ~/.ai-memory/
    ```
 
 5. **Start Neo4j (Docker):**
@@ -57,7 +57,7 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
    docker run -d --name neo4j \
      -p 7474:7474 -p 7687:7687 \
      -e NEO4J_AUTH=neo4j/your_password_here \
-     -v ~/.openclaw/neo4j-data:/data \
+     -v ~/.ai-memory/neo4j-data:/data \
      neo4j:latest
 
    # Wait ~15s for Neo4j to finish starting
@@ -67,19 +67,19 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
 6. **Set up Python environment and initialize schema:**
    ```bash
    # Create .env.neo4j
-   cat > ~/.openclaw/workspace/.env.neo4j << EOF
+   cat > ~/.ai-memory/.env.neo4j << EOF
    NEO4J_URI=bolt://localhost:7687
    NEO4J_USERNAME=neo4j
    NEO4J_PASSWORD=your_password_here
    EOF
 
    # Create Python venv
-   python3 -m venv ~/.openclaw/workspace/neo4j-venv
-   source ~/.openclaw/workspace/neo4j-venv/bin/activate
+   python3 -m venv ~/.ai-memory/neo4j-venv
+   source ~/.ai-memory/neo4j-venv/bin/activate
    pip install -r requirements.txt
 
    # Initialize schema (Neo4j must be running first)
-   python3 ~/.openclaw/workspace/scripts/neo4j_seed.py
+   python3 ~/.ai-memory/scripts/neo4j_seed.py
    ```
 
 7. **Register cron jobs:**
@@ -97,10 +97,10 @@ This package teaches a new AI agent how to build a 5-layer memory system combini
 9. **Bootstrap:**
    ```bash
    # Follow the bootstrap instructions
-   cat ~/.openclaw/workspace/BOOTSTRAP.md
+   cat ~/.ai-memory/BOOTSTRAP.md
 
    # Then delete it
-   rm ~/.openclaw/workspace/BOOTSTRAP.md
+   rm ~/.ai-memory/BOOTSTRAP.md
    ```
 
 ---
@@ -213,8 +213,8 @@ docker start neo4j  # Start if stopped
 
 ### Memory search returns nothing
 ```bash
-python3 ~/.openclaw/workspace/scripts/neo4j_seed.py  # Re-initialize
-python3 ~/.openclaw/workspace/scripts/neo4j_sync.py --full  # Force full sync
+python3 ~/.ai-memory/scripts/neo4j_seed.py  # Re-initialize
+python3 ~/.ai-memory/scripts/neo4j_sync.py --full  # Force full sync
 ```
 
 ### Cron jobs not running

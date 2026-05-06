@@ -32,7 +32,7 @@ Context compaction truncates session history mid-conversation. When this happens
 1. **Read today's memory file** — `memory/YYYY-MM-DD.md`. Look for in-progress tasks, recent decisions, current project state.
 2. **Search for missing context** — if you're working on a specific topic, run:
    ```bash
-   python3 ~/.openclaw/workspace/hybrid_memory_search.py "<current topic>" --max-results 5
+   python3 ~/.ai-memory/hybrid_memory_search.py "<current topic>" --max-results 5
    ```
 3. **Validate state before acting** — don't assume you know the current state of a bot, service, or file. Re-check with `systemctl --user status <service>` or read the relevant file.
 4. **Flag uncertainty** — if you can't recover enough context to act confidently, tell the user: "Context was compacted — I've re-read memory files but may be missing [X]. Can you confirm [Y] before I proceed?"
@@ -97,10 +97,10 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 When asked about learned topics, concepts, or prior knowledge:
 
 **ALWAYS use hybrid search first:**
-- **Default (Neo4j Vector)**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --max-results 5`
-- **With graph context**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --graph --max-results 5`
-- **Files only**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --files-only`
-- **Local FAISS (offline)**: `python3 ~/.openclaw/workspace/scripts/hybrid_memory_search.py "<query>" --use-embeddings`
+- **Default (Neo4j Vector)**: `python3 ~/.ai-memory/scripts/hybrid_memory_search.py "<query>" --max-results 5`
+- **With graph context**: `python3 ~/.ai-memory/scripts/hybrid_memory_search.py "<query>" --graph --max-results 5`
+- **Files only**: `python3 ~/.ai-memory/scripts/hybrid_memory_search.py "<query>" --files-only`
+- **Local FAISS (offline)**: `python3 ~/.ai-memory/scripts/hybrid_memory_search.py "<query>" --use-embeddings`
 
 This searches:
 - **Neo4j vector index** — Semantic similarity via Fact.embedding

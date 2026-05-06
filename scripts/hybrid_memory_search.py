@@ -23,10 +23,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 import subprocess
 
-# Load environment
-load_dotenv(Path.home() / ".openclaw" / "workspace" / ".env.neo4j")
+# Workspace directory: set AI_MEMORY_DIR env var to override default (~/.ai-memory)
+_WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
+load_dotenv(_WORKSPACE / ".env.neo4j")
 
-MEMORY_DIR = Path.home() / ".openclaw" / "workspace" / "memory"
+MEMORY_DIR = _WORKSPACE / "memory"
 # Override with NEO4J_VECTOR_INDEX env var if your existing index has a different name
 VECTOR_INDEX = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
 

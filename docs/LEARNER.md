@@ -116,8 +116,8 @@ so `neo4j_sync.py` picks them up automatically:
 
 ```bash
 # Run manually or via the Neo4j Session Sync cron job
-source ~/.openclaw/workspace/neo4j-venv/bin/activate
-python3 ~/.openclaw/workspace/scripts/neo4j_sync.py
+source ~/.ai-memory/neo4j-venv/bin/activate
+python3 ~/.ai-memory/scripts/neo4j_sync.py
 ```
 
 Creates:

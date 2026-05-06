@@ -96,13 +96,13 @@ summary: "Max 200 chars"
 **Search:**
 ```bash
 # Hybrid search (Neo4j + files)
-python3 hybrid_memory_search.py "your topic" --max-results 5
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your topic" --max-results 5
 
 # With graph relationships
-python3 hybrid_memory_search.py "your topic" --graph
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your topic" --graph
 
 # Files only
-python3 hybrid_memory_search.py "your topic" --files-only
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your topic" --files-only
 ```
 
 ### Layer 5: FAISS Embeddings
@@ -223,7 +223,7 @@ python3 scripts/neo4j_sync.py --full
 ### Context compaction (lost context)
 ```bash
 # Search for topic
-python3 hybrid_memory_search.py "lost topic" --max-results 5
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "lost topic" --max-results 5
 
 # Check today's log
 cat memory/$(date +%Y-%m-%d).md
@@ -259,4 +259,4 @@ cat memory/$(date +%Y-%m-%d).md
 - **Neo4j 5.x+** — Vector index support
 - **Ollama** — `nomic-embed-text` for embeddings
 - **Python 3.9+** — `neo4j`, `python-dotenv`, `ollama`
-- **OpenClaw** — Cron system for scheduled jobs
+- **Scheduler** — Any cron-compatible scheduler (OS cron, systemd timers, agent platform scheduler)

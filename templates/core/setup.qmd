@@ -19,7 +19,7 @@ summary: "Environment and setup details"
 
 ## Software
 
-- **OpenClaw version:** [Version]
+- **Agent Platform:** [e.g., Claude Code, Custom]
 - **Node.js:** [Version]
 - **Python:** [Version]
 
@@ -40,10 +40,10 @@ summary: "Environment and setup details"
 
 | Purpose | Path |
 |---------|------|
-| Workspace | `~/.openclaw/workspace/` |
-| Memory | `~/.openclaw/workspace/memory/` |
-| Skills | `~/.openclaw/skills/` |
-| Neo4j venv | `~/.openclaw/workspace/neo4j-venv/` |
+| Workspace | `~/.ai-memory/` |
+| Memory | `~/.ai-memory/memory/` |
+| Scripts | `~/.ai-memory/scripts/` |
+| Neo4j venv | `~/.ai-memory/neo4j-venv/` |
 
 ---
 

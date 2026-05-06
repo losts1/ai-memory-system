@@ -27,13 +27,13 @@ This gives you:
 ### Step 1: Create Directory Structure
 
 ```bash
-mkdir -p ~/.openclaw/workspace/memory/{core,sessions,inbox,archive,learner-sessions,embeddings,projects}
-touch ~/.openclaw/workspace/memory/inbox/.gitkeep
+mkdir -p ~/.ai-memory/memory/{core,sessions,inbox,archive,learner-sessions,embeddings,projects}
+touch ~/.ai-memory/memory/inbox/.gitkeep
 ```
 
 ### Step 2: Create Core Files
 
-Create these files in `~/.openclaw/workspace/`:
+Create these files in `~/.ai-memory/`:
 
 | File | Purpose |
 |------|---------|
@@ -46,7 +46,7 @@ Create these files in `~/.openclaw/workspace/`:
 
 ### Step 3: Create Core Memory Files
 
-Create these in `~/.openclaw/workspace/memory/core/`:
+Create these in `~/.ai-memory/memory/core/`:
 
 | File | Purpose |
 |------|---------|
@@ -62,14 +62,14 @@ Create these in `~/.openclaw/workspace/memory/core/`:
    docker run -d --name neo4j \
      -p 7474:7474 -p 7687:7687 \
      -e NEO4J_AUTH=neo4j/your_password \
-     -v ~/.openclaw/neo4j-data:/data \
+     -v ~/.ai-memory/neo4j-data:/data \
      neo4j:latest
 
    # Wait for Neo4j to be ready before proceeding
    docker logs -f neo4j 2>&1 | grep -m1 "Started"
    ```
 
-2. Create `~/.openclaw/workspace/.env.neo4j`:
+2. Create `~/.ai-memory/.env.neo4j`:
    ```
    NEO4J_URI=bolt://localhost:7687
    NEO4J_USERNAME=neo4j
@@ -78,8 +78,8 @@ Create these in `~/.openclaw/workspace/memory/core/`:
 
 3. Create Python virtual environment:
    ```bash
-   python3 -m venv ~/.openclaw/workspace/neo4j-venv
-   source ~/.openclaw/workspace/neo4j-venv/bin/activate
+   python3 -m venv ~/.ai-memory/neo4j-venv
+   source ~/.ai-memory/neo4j-venv/bin/activate
    pip install -r requirements.txt
    ```
 
@@ -88,21 +88,24 @@ Create these in `~/.openclaw/workspace/memory/core/`:
    python3 scripts/neo4j_seed.py
    ```
 
-### Step 5: Set Up Cron Jobs
+### Step 5: Set Up Scheduled Tasks
 
-Copy the cron job definitions from `docs/CRON_JOBS.md` and register them with OpenClaw's cron system.
+Register the scheduled tasks from `docs/CRON_JOBS.md` using your platform's scheduler. Options:
+- **OS cron / systemd timers** — trigger your agent CLI on a schedule
+- **Agent platform scheduler** — use your platform's built-in job system
+- **Heartbeat loop** — if your agent supports a periodic heartbeat, add tasks to `HEARTBEAT.md` and the agent will pick them up; no external scheduler needed
 
 ### Step 6: Read Your Identity
 
 ```bash
-cat ~/.openclaw/workspace/SOUL.md
-cat ~/.openclaw/workspace/USER.md
+cat ~/.ai-memory/SOUL.md
+cat ~/.ai-memory/USER.md
 ```
 
 ### Step 7: Delete This File
 
 ```bash
-rm ~/.openclaw/workspace/BOOTSTRAP.md
+rm ~/.ai-memory/BOOTSTRAP.md
 ```
 
 You're now ready. Read `AGENTS.md` for your behavioral rules.
@@ -129,10 +132,10 @@ You're now ready. Read `AGENTS.md` for your behavioral rules.
 
 ```bash
 # Hybrid search (Neo4j + files)
-python3 ~/.openclaw/workspace/hybrid_memory_search.py "your query" --max-results 5
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your query" --max-results 5
 
 # Files only
-python3 ~/.openclaw/workspace/hybrid_memory_search.py "your query" --files-only
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your query" --files-only
 ```
 
 ---
