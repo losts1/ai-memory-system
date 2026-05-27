@@ -113,6 +113,50 @@ def _find_memory_files_to_sync(memory_dir: Path, cutoff: datetime, already_synce
 
     return memory_files
 
+
+def _post_process_graph(session, driver) -> None:
+    """Run post-sync graph maintenance: word frequencies, related fact linking, orphaned word cleanup."""
+    # Update word frequencies (for stopwords filtering)
+    session.run("""
+        MATCH (w:Word)<-[:HAS_WORD]-(f:Fact)
+        WITH w, count(DISTINCT f) AS df
+        SET w.df = df
+    """)
+
+    # Link related facts (using Word index, tighter params to reduce noise)
+    session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
+
+    # Cleanup orphaned Word nodes
+    session.execute_write(cleanup_orphaned_words)
+
+
+def _update_indexes_and_optional_extraction(topics: list, driver, extract_params: bool) -> None:
+    """Update embedding/vector indexes and optionally run parameter extraction."""
+    if EMBEDDING_INDEX_AVAILABLE:
+        update_embedding_index(topics)
+
+    if NEO4J_VECTOR_AVAILABLE:
+        update_neo4j_vector(topics, driver)
+
+    if extract_params:
+        print("\nRunning parameter extraction...")
+        try:
+            from neo4j_param_extract import run_extraction, load_all_facts
+            all_facts = load_all_facts(driver)
+            run_extraction(driver, all_facts)
+        except ImportError:
+            print("Warning: neo4j_param_extract.py not found, skipping param extraction", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: param extraction failed: {e}", file=sys.stderr)
+
+
+def _save_sync_state(state: dict, memory_files: list[Path]) -> None:
+    """Persist the list of scanned files so we don't re-process them unnecessarily."""
+    state['last_sync'] = datetime.now().isoformat()
+    state['synced_files'].extend(f.name for f in memory_files)
+    state['synced_files'] = list(set(state['synced_files']))
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
 MEMORY_DIR = _WORKSPACE / 'memory'
 STATE_FILE = MEMORY_DIR / 'neo4j_learn_sync_state.json'
 
@@ -497,52 +541,15 @@ def main():
                         synced += 1
                         print(f"  ✓ {topic['name']}")
 
-                # Update word frequencies (for stopwords filtering)
-                session.run("""
-                    MATCH (w:Word)<-[:HAS_WORD]-(f:Fact)
-                    WITH w, count(DISTINCT f) AS df
-                    SET w.df = df
-                """)
-
-                # Link related facts (using Word index, tighter params to reduce noise)
-                session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
-
-                # Cleanup orphaned Word nodes
-                session.execute_write(cleanup_orphaned_words)
+                _post_process_graph(session, driver)
 
             print(f"\nSynced {synced} topics to Neo4j")
 
-            # Update embedding index for semantic search
-            if EMBEDDING_INDEX_AVAILABLE:
-                update_embedding_index(all_topics)
-
-            # Update Neo4j vector index for graph-aware search
-            if NEO4J_VECTOR_AVAILABLE:
-                update_neo4j_vector(all_topics, driver)
-
-            # Optionally run parameter extraction for newly synced facts
-            if args.extract_params:
-                print("\nRunning parameter extraction...")
-                try:
-                    from neo4j_param_extract import run_extraction, load_all_facts
-                    all_facts = load_all_facts(driver)
-                    run_extraction(driver, all_facts)
-                except ImportError:
-                    print(
-                        "Warning: neo4j_param_extract.py not found, skipping param extraction",
-                        file=sys.stderr,
-                    )
-                except Exception as e:
-                    print(f"Warning: param extraction failed: {e}", file=sys.stderr)
+            _update_indexes_and_optional_extraction(all_topics, driver, args.extract_params)
         else:
             print("No new topics to sync")
 
-        # Always persist scanned files to state — prevents O(n) re-scan on every run
-        # even when all topics already exist in Neo4j.
-        state['last_sync'] = datetime.now().isoformat()
-        state['synced_files'].extend(f.name for f in memory_files)
-        state['synced_files'] = list(set(state['synced_files']))  # Dedupe
-        STATE_FILE.write_text(json.dumps(state, indent=2))
+        _save_sync_state(state, memory_files)
             
     finally:
         driver.close()
