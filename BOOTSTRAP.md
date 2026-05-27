@@ -4,6 +4,18 @@
 
 ---
 
+**Two Paths**
+
+Most new agents follow the **standard path** (build your own memory system from scratch).
+
+However, it is also possible (and often more powerful) to **attach as a submind** to an existing mature graph. See the dedicated guide:
+
+→ **[docs/SUBMINDS.md](docs/SUBMINDS.md)**
+
+If you have been given access to an existing Neo4j graph, strongly consider starting there instead of (or in addition to) building everything from zero.
+
+---
+
 ## What You're Building
 
 A **persistent memory system** that survives across sessions. You'll create:

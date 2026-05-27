@@ -2,15 +2,23 @@
 
 ## Overview
 
-The AI Memory System is a **5-layer hybrid architecture** combining:
+The AI Memory System is a **hybrid memory architecture** combining markdown files, structured summaries, a Neo4j knowledge graph, and semantic search.
 
-| Layer | Technology | Purpose | Update Frequency |
-|-------|------------|---------|-------------------|
-| 1 | `MEMORY.md` | Curated long-term memory | Weekly distillation |
-| 2 | `memory/*.md` | Raw session logs | Every session |
-| 3 | `memory/sessions/*.qmd` | Structured QMD summaries | Daily (cron) |
-| 4 | Neo4j | Knowledge graph + vector search | 30-min sync |
-| 5 | FAISS | Local semantic embeddings (offline fallback) | On-demand |
+> **Note on this document:** This is the public redistribution package documentation. The full production system contains additional advanced RLM (Recursive Language Model) enhancements (lazy loading, graph parameter tracing, per-session memory state, etc.) that are not yet fully reflected here. See [UPGRADE_PLAN.md](../UPGRADE_PLAN.md) for the current roadmap.
+
+| Layer | Technology | Purpose | Update Frequency | Notes |
+|-------|------------|---------|------------------|-------|
+| 1 | `MEMORY.md` | Curated long-term memory | Weekly distillation | Core |
+| 2 | `memory/*.md` | Raw session logs | Every session | Core |
+| 3 | `memory/sessions/*.qmd` | Structured QMD summaries | Daily (cron) | Core |
+| 4 | Neo4j | Knowledge graph + vector search | 30-min sync | Primary semantic + relational engine |
+| 5 | FAISS | Local semantic embeddings (offline fallback) | On-demand | **Optional** — requires manual index building |
+
+### Public Package vs Full Production System
+
+This documentation describes the public redistribution package. The actual system used in production contains significant additional RLM enhancements (lazy metadata-only loading, graph-based parameter tracing, per-session memory state tracking, advanced learn sync, etc.). These are documented in the private environment and are being gradually upstreamed as part of the upgrade plan.
+
+See [docs/SUBMINDS.md](./SUBMINDS.md) for guidance on attaching new minds to an existing graph.
 
 ## Layer Details
 

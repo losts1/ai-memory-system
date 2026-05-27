@@ -2,16 +2,24 @@
 
 > **Give your AI agent persistent memory that survives across sessions.**
 
-This package teaches a new AI agent how to build a 5-layer memory system combining markdown files, structured summaries, a Neo4j knowledge graph, and semantic search.
+This package teaches a new AI agent how to build a hybrid memory system (markdown files + structured summaries + Neo4j knowledge graph + semantic search). One layer (local FAISS embeddings) is optional and requires manual setup.
 
 ## Status & Roadmap
 
 This repository contains the **public redistribution package** — the clean bootstrap experience you can give to a new AI agent.
 
-Active work to make the system more generic, multi-mind friendly, and reusable is tracked here:
+**Important:** This is the public starter kit. The full production system (deeper RLM features, advanced tooling, heavy domain-specific work) lives in a private environment. See [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) for the full picture.
+
+Active work to make the system more generic and multi-mind friendly is tracked here:
 
 - **[UPGRADE_PLAN.md](./UPGRADE_PLAN.md)**
 - **[DECISIONS.md](./DECISIONS.md)**
+
+Phase 0 is complete. We are in **Phase 1** (Honest positioning + documentation).
+
+New agents can now attach to an existing mature graph as **subminds**. See the new guide:
+
+- **[docs/SUBMINDS.md](./docs/SUBMINDS.md)**
 
 Phase 0 (Foundations & Decisions) is complete. Moving to Phase 1.
 
