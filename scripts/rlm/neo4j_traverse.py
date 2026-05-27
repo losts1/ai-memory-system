@@ -410,42 +410,33 @@ Examples:
     if not args.stats and not args.start:
         parser.error('--start is required unless --stats is used')
 
-    # Connect using public package conventions
     try:
         driver = get_driver()
     except Exception as e:
-        out = {'success': False, 'error': f'Cannot connect to Neo4j: {e}'}
-        print(json.dumps(out, indent=2))
+        print(json.dumps({'success': False, 'error': f'Cannot connect to Neo4j: {e}'}, indent=2))
         sys.exit(1)
 
     try:
-        field_list = [f.strip() for f in args.fields.split(',')]
+        field_list = [f.strip() for f in args.fields.split(',')] if args.fields else ['name']
 
         if args.stats:
             result = get_graph_stats(driver)
             if args.json:
                 print(json.dumps(result, indent=2))
+            elif result.get('success'):
+                s = result['stats']
+                print("Graph Statistics")
+                print("=" * 40)
+                for label, count in s.get('node_counts', {}).items():
+                    print(f"  {label}: {count}")
+                print("\nEdges:")
+                for etype, count in s.get('edge_counts', {}).items():
+                    print(f"  {etype}: {count}")
+                print(f"\nTotal edges: {s.get('total_edges', '?')}")
             else:
-                if result.get('success'):
-                    s = result['stats']
-                    print("Graph Statistics")
-                    print("=" * 40)
-                    print("\nNode counts:")
-                    for label, count in s.get('node_counts', {}).items():
-                        print(f"  {label}: {count}")
-                    print("\nEdge counts:")
-                    for etype, count in s.get('edge_counts', {}).items():
-                        print(f"  {etype}: {count}")
-                    print(f"\nTotal edges: {s.get('total_edges', '?')}")
-                    if 'fact_avg_related_to_degree' in s:
-                        print(f"Fact avg RELATED_TO degree: {s['fact_avg_related_to_degree']}")
-                    if 'total_facts' in s:
-                        print(f"Total Facts: {s['total_facts']}")
-                else:
-                    print(f"Error: {result.get('error')}")
+                print(f"Error: {result.get('error')}")
 
         elif args.parameter:
-            field_list = [f.strip() for f in args.fields.split(',')] if args.fields else None
             result = trace_parameter(
                 driver,
                 start=args.start,
@@ -457,21 +448,14 @@ Examples:
             )
             if args.json:
                 print(json.dumps(result, indent=2))
+            elif result.get('success'):
+                print(f"\nRLM Parameter Trace: '{args.parameter}' from '{args.start}' (depth {result['depth']})")
+                print(f"Matches: {result['total_nodes']}")
+                print("=" * 60)
+                for node in result.get('nodes', []):
+                    _print_node(node)
             else:
-                if result.get('success'):
-                    print(f"\nRLM Parameter Trace")
-                    print(f"Parameter : '{args.parameter}'")
-                    print(f"Starting  : '{args.start}'")
-                    print(f"Depth     : {result['depth']}")
-                    print(f"Matches   : {result['total_nodes']} nodes")
-                    print("=" * 60)
-                    if result['total_nodes'] == 0:
-                        print("No nodes matched this parameter within the depth limit.")
-                    else:
-                        for node in result['nodes']:
-                            _print_node(node)
-                else:
-                    print(f"Error: {result.get('error')}")
+                print(f"Error: {result.get('error')}")
 
         else:
             result = traverse_neighborhood(

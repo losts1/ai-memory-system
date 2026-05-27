@@ -453,31 +453,51 @@ def get_driver():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Memory state management for Neo4j-backed session tracking."
+        description="Memory state management for Neo4j-backed session tracking (Phase 4 RLM tool)."
     )
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Action flags (mutually exclusive group-ish, but we check manually)
-    parser.add_argument("--init", action="store_true", help="Initialize/refresh session state")
-    parser.add_argument("--record-query", action="store_true", help="Record a search query and its results")
-    parser.add_argument("--mark-loaded", action="store_true", help="Mark facts as loaded into LLM context")
-    parser.add_argument("--pending", action="store_true", help="List pending (unloaded) facts for session")
-    parser.add_argument("--summary", action="store_true", help="Print full session state summary")
-    parser.add_argument("--load-fact", action="store_true", help="Load a specific fact by name, mark as loaded")
-    parser.add_argument("--load-next", action="store_true", help="Load next N pending facts, mark as loaded")
-    parser.add_argument("--cleanup", action="store_true", help="Remove stale sessions older than --max-age-hours")
-    parser.add_argument("--list-sessions", action="store_true", help="List all active sessions")
+    # init
+    p = subparsers.add_parser("init", help="Initialize or refresh a session")
+    p.add_argument("--session", required=True, help="Session ID (e.g. 'weft:main')")
 
-    # Parameters
-    parser.add_argument("--session", help="Session ID (e.g. 'agent:main:main')")
-    parser.add_argument("--query", help="Query text (for --record-query)")
-    parser.add_argument("--results", help="Comma-separated fact names (for --record-query or --mark-loaded)")
-    parser.add_argument("--scores", help="Comma-separated scores matching --results (for --record-query)")
-    parser.add_argument("--facts", help="Comma-separated fact names (for --mark-loaded)")
-    parser.add_argument("--fact", help="Single fact name (for --load-fact)")
-    parser.add_argument("--count", type=int, default=3, help="Number of facts to load (for --load-next)")
-    parser.add_argument("--max-age-hours", type=int, default=24, help="Max age in hours (for --cleanup)")
-    parser.add_argument("--state", default="pending", choices=["pending", "loaded"],
-                        help="Initial state for recorded facts (default: pending)")
+    # record-query
+    p = subparsers.add_parser("record-query", help="Record a search query and results")
+    p.add_argument("--session", required=True)
+    p.add_argument("--query", required=True)
+    p.add_argument("--results", required=True, help="Comma-separated fact names")
+    p.add_argument("--scores", help="Comma-separated scores (optional)")
+    p.add_argument("--state", default="pending", choices=["pending", "loaded"])
+
+    # mark-loaded
+    p = subparsers.add_parser("mark-loaded", help="Mark facts as loaded into context")
+    p.add_argument("--session", required=True)
+    p.add_argument("--facts", required=True, help="Comma-separated fact names")
+
+    # pending
+    p = subparsers.add_parser("pending", help="Show pending facts for a session")
+    p.add_argument("--session", required=True)
+
+    # summary
+    p = subparsers.add_parser("summary", help="Show full state summary for a session")
+    p.add_argument("--session", required=True)
+
+    # load-fact
+    p = subparsers.add_parser("load-fact", help="Load one specific fact")
+    p.add_argument("--session", required=False)
+    p.add_argument("--fact", required=True)
+
+    # load-next
+    p = subparsers.add_parser("load-next", help="Load the next N pending facts")
+    p.add_argument("--session", required=True)
+    p.add_argument("--count", type=int, default=3)
+
+    # cleanup
+    p = subparsers.add_parser("cleanup", help="Remove old sessions")
+    p.add_argument("--max-age-hours", type=int, default=24)
+
+    # list-sessions
+    subparsers.add_parser("list-sessions", help="List all known sessions")
 
     args = parser.parse_args()
 
@@ -488,87 +508,53 @@ def main():
         sys.exit(1)
 
     try:
-        if args.init:
-            if not args.session:
-                print(json.dumps({"success": False, "error": "--session required"}))
-                sys.exit(1)
+        if args.command == "init":
             result = manager.init_session(args.session)
             print(json.dumps({"success": True, **result}))
 
-        elif args.record_query:
-            if not args.session or not args.query:
-                print(json.dumps({"success": False, "error": "--session and --query required"}))
-                sys.exit(1)
-
-            names = _parse_list(args.results) if args.results else []
-            scores_raw = _parse_list(args.scores) if args.scores else []
-            scores = [float(s) for s in scores_raw]
-
-            # Pad or trim scores to match names
-            while len(scores) < len(names):
-                scores.append(0.0)
+        elif args.command == "record-query":
+            names = _parse_list(args.results)
+            scores = _parse_list(args.scores) if args.scores else []
+            scores = [float(s) for s in scores] + [0.0] * (len(names) - len(scores))
             scores = scores[: len(names)]
-
             results = [{"name": n, "score": sc} for n, sc in zip(names, scores)]
             result = manager.record_query(args.session, args.query, results, state=args.state)
             print(json.dumps({"success": True, **result}))
 
-        elif args.mark_loaded:
-            if not args.session:
-                print(json.dumps({"success": False, "error": "--session required"}))
-                sys.exit(1)
-            fact_names = _parse_list(args.facts or args.results or "")
-            if not fact_names:
-                print(json.dumps({"success": False, "error": "--facts required"}))
-                sys.exit(1)
+        elif args.command == "mark-loaded":
+            fact_names = _parse_list(args.facts)
             updated = manager.mark_loaded(args.session, fact_names)
             print(json.dumps({"success": True, "updated": updated}))
 
-        elif args.pending:
-            if not args.session:
-                print(json.dumps({"success": False, "error": "--session required"}))
-                sys.exit(1)
+        elif args.command == "pending":
             pending = manager.get_pending(args.session)
             print(json.dumps({"success": True, "pending": pending, "count": len(pending)}))
 
-        elif args.summary:
-            if not args.session:
-                print(json.dumps({"success": False, "error": "--session required"}))
-                sys.exit(1)
+        elif args.command == "summary":
             summary = manager.get_summary(args.session)
             if summary is None:
                 print(json.dumps({"success": False, "error": f"Session not found: {args.session}"}))
                 sys.exit(1)
             print(json.dumps({"success": True, **summary}))
 
-        elif args.load_fact:
-            if not args.fact:
-                print(json.dumps({"success": False, "error": "--fact required"}))
-                sys.exit(1)
+        elif args.command == "load-fact":
             fact = manager.load_fact(args.session, args.fact)
             if fact is None:
                 print(json.dumps({"success": False, "error": f"Fact not found: {args.fact}"}))
                 sys.exit(1)
             print(json.dumps({"success": True, **fact}))
 
-        elif args.load_next:
-            if not args.session:
-                print(json.dumps({"success": False, "error": "--session required"}))
-                sys.exit(1)
+        elif args.command == "load-next":
             facts = manager.load_next(args.session, count=args.count)
             print(json.dumps({"success": True, "facts": facts, "count": len(facts)}))
 
-        elif args.cleanup:
+        elif args.command == "cleanup":
             deleted = manager.cleanup(max_age_hours=args.max_age_hours)
             print(json.dumps({"success": True, "deleted_sessions": deleted}))
 
-        elif args.list_sessions:
+        elif args.command == "list-sessions":
             sessions = manager.list_sessions()
             print(json.dumps({"success": True, "sessions": sessions, "count": len(sessions)}))
-
-        else:
-            parser.print_help()
-            sys.exit(1)
 
     finally:
         manager.close()
