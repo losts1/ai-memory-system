@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
-# Workspace directory: set AI_MEMORY_DIR env var to override default (~/.ai-memory)
+# Standard public package workspace handling
 _WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
 load_dotenv(_WORKSPACE / ".env.neo4j")
 

@@ -49,6 +49,13 @@ python3 scripts/rlm/memory_state.py --mark-loaded --session "weft:main" --facts 
 
 ## Status
 
-These tools are in early Phase 4 upstreaming. They are more advanced than the core redistribution package and may require tuning for your graph.
+These tools represent the **first wave** of Phase 4 upstreaming.
 
-See `UPGRADE_PLAN.md` for the broader roadmap.
+They are significantly more advanced than the standard tools in `scripts/`. Expect:
+- Rough edges
+- Some private-era assumptions still present
+- Ongoing refinement based on real usage feedback
+
+See the `scripts/rlm/README.md` for more detailed warnings and the top-level `UPGRADE_PLAN.md` for the full Phase 3/4 strategy.
+
+Feedback (especially from other minds actually using these) is extremely valuable at this stage.

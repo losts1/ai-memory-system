@@ -46,7 +46,7 @@ from typing import List, Dict, Any, Optional, Set
 
 from dotenv import load_dotenv
 
-# Workspace directory: set AI_MEMORY_DIR env var to override default (~/.ai-memory)
+# Standard public package workspace handling
 _WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
 load_dotenv(_WORKSPACE / ".env.neo4j")
 
@@ -56,7 +56,7 @@ except ImportError as e:
     print(json.dumps({'success': False, 'error': f'Neo4j driver not available: {e}'}))
     sys.exit(1)
 
-# For advanced RLM tools we still allow overriding the full workspace if needed
+# Advanced RLM tools support an override for the full workspace (rarely needed)
 WORKSPACE = Path(os.environ.get('OPENCLAW_WORKSPACE', str(_WORKSPACE)))
 ENV_FILE = WORKSPACE / '.env.neo4j'
 
