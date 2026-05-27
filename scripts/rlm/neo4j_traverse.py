@@ -156,6 +156,34 @@ def _node_matches_filter(rec: Dict, filter_word: str) -> bool:
     return fw in [w.lower() for w in top_words] or fw in kp_text.lower()
 
 
+def _process_traversal_records(
+    records,
+    visited: Set[str],
+    max_nodes: int,
+    fields: List[str],
+    metadata_only: bool,
+    filter_fn=None
+) -> List[Dict[str, Any]]:
+    """Common post-processing for traversal results: visited set, max nodes, optional filter, formatting."""
+    nodes = []
+    for record in records:
+        node_name = record['name']
+        if node_name in visited:
+            continue
+        visited.add(node_name)
+
+        rec_dict = dict(record)
+
+        if filter_fn and not filter_fn(rec_dict):
+            continue
+
+        nodes.append(_format_node(node_name, rec_dict, fields, metadata_only))
+
+        if len(nodes) >= max_nodes:
+            break
+    return nodes
+
+
 def traverse_neighborhood(
     driver,
     start: str,
@@ -190,22 +218,13 @@ def traverse_neighborhood(
 
         try:
             records = session.run(cypher, {'start_name': start, 'max_nodes': max_nodes})
-            for record in records:
-                node_name = record['name']
-                if node_name in visited:
-                    continue
-                visited.add(node_name)
 
-                rec_dict = dict(record)
+            def filter_fn(rec):
+                return _node_matches_filter(rec, filter_word) if filter_word else True
 
-                if filter_word:
-                    if not _node_matches_filter(rec_dict, filter_word):
-                        continue
-
-                nodes.append(_format_node(node_name, rec_dict, fields, metadata_only))
-
-                if len(nodes) >= max_nodes:
-                    break
+            nodes = _process_traversal_records(
+                records, visited, max_nodes, fields, metadata_only, filter_fn
+            )
 
         except Exception as e:
             return {'success': False, 'error': f'Traversal query failed: {e}'}
@@ -324,17 +343,14 @@ def trace_parameter(
                 'param': parameter.lower(),
                 'max_nodes': max_nodes
             })
-            for record in records:
-                node_name = record['name']
-                if node_name in visited:
-                    continue
-                visited.add(node_name)
 
-                rec_dict = dict(record)
-                nodes.append(_format_node(node_name, rec_dict, fields, metadata_only))
+            def param_filter_fn(rec):
+                # In parameter mode we already filter in Cypher, but keep the helper for consistency
+                return True
 
-                if len(nodes) >= max_nodes:
-                    break
+            nodes = _process_traversal_records(
+                records, visited, max_nodes, fields, metadata_only, param_filter_fn
+            )
 
         except Exception as e:
             return {'success': False, 'error': f'Parameter trace query failed: {e}'}
@@ -354,43 +370,8 @@ def get_graph_stats(driver) -> Dict[str, Any]:
     stats: Dict[str, Any] = {}
 
     with driver.session() as session:
-        # Node counts by label
-        label_result = session.run(
-            "CALL db.labels() YIELD label "
-            "CALL apoc.cypher.run('MATCH (n:' + label + ') RETURN count(n) as cnt', {}) YIELD value "
-            "RETURN label, value.cnt AS count "
-            "ORDER BY count DESC"
-        )
-        label_counts: Dict[str, int] = {}
-        try:
-            for record in label_result:
-                label_counts[record['label']] = record['count']
-        except Exception:
-            # APOC may not be available; fall back to individual queries
-            for label in ['Fact', 'Word', 'Session', 'Event']:
-                try:
-                    r = session.run(f"MATCH (n:{label}) RETURN count(n) AS cnt")  # noqa: S608
-                    rec = r.single()
-                    label_counts[label] = rec['cnt'] if rec else 0
-                except Exception:
-                    label_counts[label] = -1
-
-        stats['node_counts'] = label_counts
-
-        # Edge counts by type
-        edge_result = session.run(
-            "CALL db.relationshipTypes() YIELD relationshipType "
-            "RETURN relationshipType"
-        )
-        edge_types = [r['relationshipType'] for r in edge_result]
-        edge_counts: Dict[str, int] = {}
-        for etype in edge_types:
-            try:
-                r = session.run(f"MATCH ()-[r:{etype}]->() RETURN count(r) AS cnt")  # noqa: S608
-                rec = r.single()
-                edge_counts[etype] = rec['cnt'] if rec else 0
-            except Exception:
-                edge_counts[etype] = -1
+        stats['node_counts'] = _get_label_counts(session)
+        edge_counts = _get_edge_counts(session)
         stats['edge_counts'] = edge_counts
         stats['total_edges'] = sum(v for v in edge_counts.values() if v >= 0)
 
@@ -410,6 +391,48 @@ def get_graph_stats(driver) -> Dict[str, Any]:
             pass
 
     return {'success': True, 'stats': stats}
+
+
+def _get_label_counts(session) -> Dict[str, int]:
+    """Get node counts per label, with fallback if APOC is unavailable."""
+    try:
+        label_result = session.run(
+            "CALL db.labels() YIELD label "
+            "CALL apoc.cypher.run('MATCH (n:' + label + ') RETURN count(n) as cnt', {}) YIELD value "
+            "RETURN label, value.cnt AS count "
+            "ORDER BY count DESC"
+        )
+        return {record['label']: record['count'] for record in label_result}
+    except Exception:
+        # Fallback
+        label_counts = {}
+        for label in ['Fact', 'Word', 'Session', 'Event']:
+            try:
+                r = session.run(f"MATCH (n:{label}) RETURN count(n) AS cnt")
+                rec = r.single()
+                label_counts[label] = rec['cnt'] if rec else 0
+            except Exception:
+                label_counts[label] = -1
+        return label_counts
+
+
+def _get_edge_counts(session) -> Dict[str, int]:
+    """Get edge counts per relationship type."""
+    try:
+        edge_result = session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType")
+        edge_types = [r['relationshipType'] for r in edge_result]
+    except Exception:
+        edge_types = ['RELATED_TO', 'HAS_WORD', 'SHARES_PARAMETER']
+
+    edge_counts = {}
+    for etype in edge_types:
+        try:
+            r = session.run(f"MATCH ()-[r:{etype}]->() RETURN count(r) AS cnt")
+            rec = r.single()
+            edge_counts[etype] = rec['cnt'] if rec else 0
+        except Exception:
+            edge_counts[etype] = -1
+    return edge_counts
 
 
 def main():
@@ -463,20 +486,7 @@ Examples:
 
         if args.stats:
             result = get_graph_stats(driver)
-            if args.json:
-                print(json.dumps(result, indent=2))
-            elif result.get('success'):
-                s = result['stats']
-                print("Graph Statistics")
-                print("=" * 40)
-                for label, count in s.get('node_counts', {}).items():
-                    print(f"  {label}: {count}")
-                print("\nEdges:")
-                for etype, count in s.get('edge_counts', {}).items():
-                    print(f"  {etype}: {count}")
-                print(f"\nTotal edges: {s.get('total_edges', '?')}")
-            else:
-                print(f"Error: {result.get('error')}")
+            _print_result(result, args.json, _print_stats)
 
         elif args.parameter:
             result = trace_parameter(
@@ -488,16 +498,7 @@ Examples:
                 metadata_only=args.metadata_only,
                 fields=field_list
             )
-            if args.json:
-                print(json.dumps(result, indent=2))
-            elif result.get('success'):
-                print(f"\nRLM Parameter Trace: '{args.parameter}' from '{args.start}' (depth {result['depth']})")
-                print(f"Matches: {result['total_nodes']}")
-                print("=" * 60)
-                for node in result.get('nodes', []):
-                    _print_node(node)
-            else:
-                print(f"Error: {result.get('error')}")
+            _print_result(result, args.json, _print_parameter_result)
 
         else:
             result = traverse_neighborhood(
@@ -510,21 +511,49 @@ Examples:
                 max_nodes=args.max_nodes,
                 metadata_only=args.metadata_only
             )
-            if args.json:
-                print(json.dumps(result, indent=2))
-            else:
-                if result.get('success'):
-                    print(f"Traversal from '{args.start}' "
-                          f"(depth {result['depth']}, rel {result['relationship']})")
-                    print(f"Found {result['total_nodes']} nodes")
-                    print("=" * 60)
-                    for node in result['nodes']:
-                        _print_node(node)
-                else:
-                    print(f"Error: {result.get('error')}")
+            _print_result(result, args.json, _print_traversal_result)
 
     finally:
         driver.close()
+
+
+def _print_result(result: Dict, as_json: bool, pretty_printer):
+    """Common result handling for all modes."""
+    if as_json:
+        print(json.dumps(result, indent=2))
+    elif result.get('success'):
+        pretty_printer(result)
+    else:
+        print(f"Error: {result.get('error')}")
+
+
+def _print_stats(result: Dict):
+    s = result['stats']
+    print("Graph Statistics")
+    print("=" * 40)
+    for label, count in s.get('node_counts', {}).items():
+        print(f"  {label}: {count}")
+    print("\nEdges:")
+    for etype, count in s.get('edge_counts', {}).items():
+        print(f"  {etype}: {count}")
+    print(f"\nTotal edges: {s.get('total_edges', '?')}")
+
+
+def _print_parameter_result(result: Dict):
+    print(f"\nRLM Parameter Trace: '{result['parameter']}' from '{result['start']}' (depth {result['depth']})")
+    print(f"Matches: {result['total_nodes']}")
+    print("=" * 60)
+    for node in result.get('nodes', []):
+        _print_node(node)
+
+
+def _print_traversal_result(result: Dict):
+    print(f"Traversal from '{result['start']}' "
+          f"(depth {result['depth']}, rel {result['relationship']})")
+    print(f"Found {result['total_nodes']} nodes")
+    print("=" * 60)
+    for node in result['nodes']:
+        _print_node(node)
 
 
 def _print_node(node: Dict[str, Any]) -> None:
