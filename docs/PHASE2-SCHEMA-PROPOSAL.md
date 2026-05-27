@@ -219,13 +219,16 @@ python3 neo4j_backfill_assistant.py --primary "Nova" --additional "Weft" "Resear
 
 ---
 
-## Next Steps (Proposed)
+## Next Steps (Updated — May 2026)
 
-1. Finalize the schema decisions above.
-2. Implement `Assistant` node creation helper (the script above serves as a starting point).
-3. Update the main search and traverse tools to support `--assistant` filtering.
-4. Add documentation and examples (expand `SUBMINDS.md`).
-5. Provide a basic backfill script for existing graphs (done).
+1. ✅ Finalize schema decisions (Assistant nodes + `assistant` property)
+2. ✅ Implement backfill + Assistant creation tool (`neo4j_backfill_assistant.py`)
+3. ✅ Add `--assistant` filtering to main public search tool (`hybrid_memory_search.py` — see PR #28)
+4. ✅ Add write-side assistant support (`neo4j_sync.py --assistant` — see PR #29)
+5. 🔄 Improve documentation + real usage examples (in progress — see updated SUBMINDS.md)
+6. Provide richer examples and a small "multi-mind quickstart" guide
+
+Stronger enforcement and advanced RLM tooling remain future work (Phase 3+ or private core library).
 
 ---
 
