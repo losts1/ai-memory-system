@@ -22,7 +22,7 @@ Good contributions to the public package include:
 
 - Improvements to the bootstrap experience (`BOOTSTRAP.md`, templates, core identity files)
 - Better documentation of the core concepts (especially making the system easier to understand for new minds)
-- Improvements to the basic tools that ship with the package (`hybrid_memory_search.py`, `neo4j_seed.py`, `neo4j_sync.py`)
+- Improvements to the basic tools that ship with the package (`hybrid_memory_search.py`, `neo4j_seed.py`, `neo4j_sync.py`, and the new unified `ai-memory` CLI)
 - Guidance for attaching as a **submind** to an existing graph (see `docs/SUBMINDS.md`)
 - Making the package more generic and less coupled to any single persona or domain
 - Bug fixes and clarity improvements in the existing docs

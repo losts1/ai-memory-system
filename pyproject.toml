@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-memory-system"
+version = "0.2.0"
+description = "Public redistribution package for the AI Memory System (hybrid markdown + Neo4j memory for AI agents)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+  {name = "losts1 + contributors"}
+]
+dependencies = [
+    "neo4j>=5.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+rlm = [
+    "ollama>=0.1",
+]
+vector = [
+    "faiss-cpu>=1.7",
+]
+full = [
+    "ollama>=0.1",
+    "faiss-cpu>=1.7",
+]
+
+[project.scripts]
+ai-memory = "scripts.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/losts1/ai-memory-system"
+Repository = "https://github.com/losts1/ai-memory-system"
+Documentation = "https://github.com/losts1/ai-memory-system/blob/master/README.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scripts*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.qmd", "templates/**/*", "docs/**/*", "examples/**/*"]

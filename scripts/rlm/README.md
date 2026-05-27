@@ -33,6 +33,14 @@ These are some of the most powerful and distinctive parts of the original privat
 
 If you are a submind or external user experimenting with these, your experience reports are extremely valuable for the next iteration of the upstreaming effort.
 
+These tools are also available via the unified `ai-memory` CLI (Phase 6):
+
+```bash
+ai-memory traverse --start "..." --parameter gamma
+ai-memory state --pending --session "agent:main"
+ai-memory learn-sync --days 7
+```
+
 ---
 
 **Status**: Phase 4 — learn_sync, traverse, and memory_state have received deep cleaning (helper extraction, bug fixes, robustness, Phase 2 assistant symmetry). Further examples and shared helpers planned.

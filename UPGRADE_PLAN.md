@@ -170,18 +170,20 @@ High-value pieces to consider upstreaming (in rough priority):
 
 ---
 
-### Phase 6: Tooling, Packaging & Developer Experience
+### Phase 6: Tooling, Packaging & Developer Experience (In Progress)
 
-- Add a small CLI: `ai-memory` (or `memory`) with commands like:
-  - `init`
-  - `search "..." --assistant weft`
-  - `traverse "..." --parameter gamma`
-  - `attach-submind`
-  - `sync`
-- Improve requirements management (separate core vs redistribution vs full production).
-- Add basic tests (even smoke tests) for the key scripts/library.
-- GitHub Actions for basic linting / packaging.
-- Consider semantic versioning once a library exists.
+**Delivered in initial pass:**
+- New unified `ai-memory` CLI (`scripts/cli.py`) with subcommands:
+  - `init`, `search`, `traverse`, `sync`, `learn-sync`, `state`, `backfill`
+- `pyproject.toml` with proper `[project.scripts]` entry point (`ai-memory`)
+- Optional dependency groups (`[rlm]`, `[vector]`, `[full]`)
+- `tests/test_cli_smoke.py` (basic argparse + import + --help smoke tests)
+- `.github/workflows/ci.yml` (ruff + smoke tests on push/PR)
+- Updated `requirements.txt` to separate core vs optional
+
+**Status:** Usable today. Run `pip install -e .` then `ai-memory --help`.
+
+Remaining nice-to-haves tracked in Phase 7 (release).
 
 ---
 
