@@ -75,28 +75,32 @@ Make the system **multi-mind by default** and **library-first**, so new agents (
 
 **Goal:** Make it natural and safe for multiple AIs (or subminds) to use the same graph.
 
-**Key Changes:**
+**Status (late May 2026):** Core foundations implemented and in review (PRs #28, #29, #30).
 
-1. **Schema updates (backward compatible where possible)**
-   - Ensure every `Fact`, `Session`, `Event`, `Decision`, etc. carries an `assistant` (or `owner_assistant`) property or relationship to an `Assistant` node.
-   - Add optional `source_mind` / `created_by` fields.
-   - Update `neo4j_seed.py` to create a default `Assistant` node + support creating new ones.
+**Key Changes (implemented or in progress):**
+
+1. **Schema updates (backward compatible where possible)** ✅
+   - `Assistant` nodes + `assistant` property on Fact/Session/etc.
+   - Migration via `scripts/neo4j_backfill_assistant.py` (hardened for real graphs)
 
 2. **Core identity & configuration**
-   - Make `SOUL.md` / `IDENTITY.md` / `AGENTS.md` declare an `assistant_id` or name.
-   - Add a small `config/assistant.json` (or equivalent) that tools can read.
+   - User-side (SOUL.md / AGENTS.md declaring identity) — guidance added to SUBMINDS.md
+   - Package-level: tools now accept `--assistant` flags
 
-3. **Tooling updates**
-   - Modify `hybrid_memory_search.py`, `neo4j_sync.py`, `neo4j_learn_sync.py`, etc. to accept `--assistant` / `--mind` flags and filter/scope writes and searches.
-   - Update `neo4j_traverse.py` and `memory_state.py` similarly.
-   - Add filtering by assistant in vector + fulltext queries.
+3. **Tooling updates** ✅ (core public tools)
+   - `hybrid_memory_search.py --assistant Weft` (filtering)
+   - `neo4j_sync.py --assistant Weft` (tagging on write)
+   - Backfill tool creates Assistant nodes + tags data
 
-4. **New supported mode: "Read-only attached submind"**
-   - Document and provide helpers for the Option A pattern (Weft's current mode): full read access + namespaced writes when ready.
-   - Add a `memory/attach-as-submind.md` template or script.
+   (Advanced private tools like traverse/memory_state still out of scope for this public package)
 
-5. **Tests & examples**
-   - Add a simple "multi-mind" example scenario in the docs.
+4. **New supported mode: "Read-only attached submind"** ✅
+   - Strong documentation + practical examples in updated SUBMINDS.md
+   - Option A (read-heavy) pattern is the recommended starting point
+
+5. **Documentation & examples** 🔄
+   - SUBMINDS.md and PHASE2-SCHEMA-PROPOSAL.md refreshed with real CLI usage
+   - Concrete examples for backfill + search + sync with assistant tagging
 
 **Deliverables:**
 - Schema migration notes (even if mostly additive).

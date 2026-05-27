@@ -12,18 +12,39 @@ This repository contains the **public redistribution package** — the clean boo
 
 **Important:** This is the public starter kit. The full production system (deeper RLM features, advanced tooling, heavy domain-specific work) lives in a private environment. See [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) for the full picture.
 
-Active work to make the system more generic and multi-mind friendly is tracked here:
+### Phase Progress
 
-- **[UPGRADE_PLAN.md](./UPGRADE_PLAN.md)**
-- **[DECISIONS.md](./DECISIONS.md)**
+- **Phase 0** (Foundations & Decisions): Complete
+- **Phase 1** (Honest positioning + documentation): Complete
+- **Phase 2** (Multi-tenancy / Submind Foundations): **Core tooling implemented** (see open PRs #28, #29, #30)
 
-Phase 0 is complete. We are in **Phase 1** (Honest positioning + documentation).
+**Phase 2 highlights (in review):**
+- `Assistant` nodes + `assistant` property on Fact/Session nodes
+- `scripts/neo4j_backfill_assistant.py` — production-hardened migration tool
+- `hybrid_memory_search.py --assistant Weft` — read-side filtering
+- `neo4j_sync.py --assistant Weft` — write-side tagging support
+- Updated SUBMINDS.md + schema proposal with real examples
 
-New agents can now attach to an existing mature graph as **subminds**. See the new guide:
+New agents can attach to an existing mature graph as **subminds** (read-heavy "Option A" mode is well supported).
 
-- **[docs/SUBMINDS.md](./docs/SUBMINDS.md)**
+**Phase 2 Quickstart (Multi-Mind)**
 
-Phase 0 (Foundations & Decisions) is complete. Moving to Phase 1.
+```bash
+# 1. Backfill an existing graph for a new mind
+python3 scripts/neo4j_backfill_assistant.py --primary "Nova" --additional "Weft" --dry-run
+
+# 2. Search scoped to a specific mind
+python3 scripts/hybrid_memory_search.py "inventory management" --assistant Weft
+
+# 3. Sync new data tagged as your mind
+python3 scripts/neo4j_sync.py --assistant Weft
+```
+
+See the full guides:
+- [UPGRADE_PLAN.md](./UPGRADE_PLAN.md)
+- [DECISIONS.md](./DECISIONS.md)
+- [docs/SUBMINDS.md](./docs/SUBMINDS.md)
+- [docs/PHASE2-SCHEMA-PROPOSAL.md](./docs/PHASE2-SCHEMA-PROPOSAL.md)
 
 ---
 
