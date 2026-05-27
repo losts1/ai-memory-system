@@ -1,179 +1,71 @@
 # Recursive Language Model (RLM) Tools
 
-**Status:** Phase 4 (In Progress) — 2026-05-27
+This document introduces the advanced RLM patterns being upstreamed in Phase 4.
 
-This document describes the **Recursive Language Model** patterns and tools being upstreamed into the public package as part of Phase 4 of the upgrade plan.
+## Philosophy
 
-This document introduces the **Recursive Language Model** approach to memory and retrieval that powers the more advanced parts of this system.
+Traditional RAG dumps large amounts of context on every turn.  
+RLM takes a different approach: **lazy, high-signal, traceable memory**.
 
----
+Key ideas:
+- Only load what is relevant for the current turn.
+- Track what the model has already "seen" in this session (`memory_state.py`).
+- Use rich graph traversal with parameter tracing to explore knowledge (`neo4j_traverse.py`).
 
-## The Core Problem
+## Current Tools (Experimental)
 
-Traditional RAG (Retrieval-Augmented Generation) has a fundamental limitation:
+Located in `scripts/rlm/`:
 
-> You either stuff too much context into the model (expensive, noisy, hits context limits), or you do shallow retrieval and miss important relationships and details.
+### 1. `neo4j_traverse.py`
 
-Most memory systems optimize for "find the top-k most similar chunks" and then dump them into the prompt. This works okay for simple lookup, but breaks down for deep, relational, or multi-hop reasoning.
+Powerful graph traversal with special support for "parameter tracing".
 
----
-
-## The RLM Idea
-
-The Recursive Language Model approach (inspired by ideas in [arXiv:2512.24601](https://arxiv.org/abs/2512.24601)) treats external memory as **first-class state** that the agent can interact with recursively and on-demand, rather than as a one-shot retrieval step.
-
-Key principles:
-
-1. **Lazy Loading** — Start with lightweight metadata only. Only load full content when the agent decides it is worth it.
-2. **On-Demand Field Loading** — Don't load entire documents. Load only the specific fields needed for the current reasoning step.
-3. **Graph Traversal as Reasoning** — Follow semantic relationships in the graph (e.g., "trace the parameter `gamma` across related market making models").
-4. **Memory State Tracking** — The system keeps track of what the agent has already seen in the current session (pending vs loaded facts).
-
-This turns retrieval from a single lookup into an interactive, multi-step process that can be steered by the agent.
-
----
-
-## The Main Patterns
-
-### 1. Lazy Loading (`--metadata-only`)
-
-Instead of returning full Fact content, the system can return only lightweight metadata:
-
-- name
-- teaser / summary
-- key point count
-- related fact count
-- top words
-
-The agent can then decide which ones are worth expanding.
-
-**Example use:**
-```bash
-python3 hybrid_memory_search.py "gamma" --metadata-only --max-results 10
-```
-
-> **Note:** Some of the more advanced flags shown in this document (such as `--load-fact`, `--fields`, and parameter tracing) are currently only available in the full production system. The public redistribution package contains more basic versions of the tools.
-
-### 2. Load on Demand (`--load-fact`, `--fields`)
-
-Once a Fact looks promising, load only what you need:
+**Key feature — Parameter Tracing**
 
 ```bash
-python3 hybrid_memory_search.py "x" --load-fact "Avellaneda-Stoikov Market Making Model"
-python3 hybrid_memory_search.py "x" --fields name,key_points,summary
+python3 scripts/rlm/neo4j_traverse.py --start "Avellaneda-Stoikov" --parameter gamma
 ```
 
-### 3. Graph Traversal (`neo4j_traverse.py`)
+This follows relationships and returns only nodes connected to the parameter "gamma" (in key_points or Word nodes). Extremely useful for exploring how a specific concept appears across your knowledge graph.
 
-Follow relationships instead of doing flat similarity search.
+Other useful flags:
+- `--depth`
+- `--fields name,summary,key_points`
+- `--metadata-only` (lightweight output)
+- `--filter-word`
 
-Especially powerful for tracing parameters or concepts across related ideas:
+### 2. `memory_state.py`
+
+Tracks per-session loaded facts so the agent can lazily request more context instead of receiving everything at once.
+
+Common commands:
 
 ```bash
-python3 neo4j_traverse.py --start "Avellaneda-Stoikov Market Making Model" --parameter gamma --depth 2
+python3 scripts/rlm/memory_state.py --init --session "weft:main"
+python3 scripts/rlm/memory_state.py --pending --session "weft:main"
+python3 scripts/rlm/memory_state.py --load-next --session "weft:main" --count 5
+python3 scripts/rlm/memory_state.py --mark-loaded --session "weft:main" --facts FactA,FactB
 ```
 
-This follows `SHARES_PARAMETER` edges and surfaces how a specific concept appears in different contexts.
+### 3. `neo4j_learn_sync.py`
 
-### 4. Session Memory State
+The ingestion pipeline that turns raw daily notes / learner sessions into high-signal Fact nodes + Word index + (optionally) embeddings.
 
-The system can track, per session:
-- Which facts have been surfaced (metadata only)
-- Which ones the agent has actually loaded
-- Which ones are still "pending"
+It is the "write" side that feeds the graph used by traverse and memory_state.
 
-This prevents the agent from re-reading the same things and supports more sophisticated "what have I learned so far?" reasoning.
+```bash
+python3 scripts/rlm/neo4j_learn_sync.py --days 7 --assistant Weft
+python3 scripts/rlm/neo4j_learn_sync.py --full --extract-params
+```
 
-### Before vs After (Illustrative)
+Supports the same `--assistant` / `--mind` tagging as the rest of the Phase 2 tools for multi-mind graphs.
 
-**Traditional approach:**
-- Retrieve top 8 most similar chunks → paste all full content into the prompt.
-- Typical result: 4,000–8,000+ tokens of mixed relevance.
+## Status
 
-**RLM-style approach:**
-- Retrieve metadata for 15 candidates (very cheap).
-- Agent reviews the list and requests full content for only 2–3 high-value Facts.
-- Agent uses graph traversal to pull related parameter context.
-- Typical result: 800–1,800 tokens, much higher signal density.
+These tools (traverse, memory_state, and the now-deep-cleaned learn_sync) represent the **first wave** of Phase 4 upstreaming.
 
-The difference becomes especially noticeable in long-running projects with hundreds of interconnected concepts.
+They have received focused refactoring (helper extraction, critical bug fixes, robustness passes, and Phase 2 assistant symmetry) to bring them to a consistent quality level suitable for early external use.
 
----
+They remain significantly more advanced than the standard tools in `scripts/`. Expect ongoing refinement.
 
-## Why This Matters
-
-Traditional RAG is mostly **pull-based and stateless**.
-
-RLM-style memory is more like having an external working memory that the agent can:
-- Inspect at different levels of detail (metadata → specific fields → full content)
-- Navigate relationally (graph traversal + parameter tracing)
-- Maintain state across turns (what have I already loaded this session?)
-
-This becomes especially valuable once your knowledge base grows beyond what comfortably fits in context.
-
----
-
-## Recommended RLM Query Pattern
-
-When working with a mature graph, the following interactive pattern tends to produce much higher signal density than "retrieve top-k and stuff everything into the prompt":
-
-1. **Browse (metadata only)**  
-   Start cheap. See what exists without loading full content.
-   ```bash
-   python3 hybrid_memory_search.py "your topic" --metadata-only --max-results 15
-   ```
-
-2. **Decide**  
-   Review teasers, `kp_count`, `related_count`, `top_words`. Choose what actually looks promising.
-
-3. **Load on demand**  
-   Pull only what you need.
-   ```bash
-   python3 hybrid_memory_search.py "x" --load-fact "Specific Fact Name"
-   # or
-   python3 hybrid_memory_search.py "x" --fields name,key_points,summary
-   ```
-
-4. **Trace / Traverse**  
-   Follow semantic relationships instead of flat similarity.
-   ```bash
-   python3 neo4j_traverse.py --start "Promising Fact" --parameter "your-concept" --depth 2
-   ```
-
-5. **Maintain session state (optional but powerful)**  
-   Use `memory_state.py` so the system remembers what you've already loaded in the current conversation and can suggest the next most useful pending facts.
-
-This pattern turns retrieval from a single blunt operation into a steerable, multi-step reasoning process.
-
----
-
-## Current Status in the Public Package (Phase 4)
-
-As of late May 2026, core pieces of the RLM pattern have been upstreamed into the public package:
-
-**Available in `scripts/rlm/`:**
-- `neo4j_traverse.py` — Graph traversal + `--parameter` tracing
-- `memory_state.py` — Per-session lazy state tracking
-- `neo4j_learn_sync.py` — High-quality Fact + Word index ingestion from notes
-- `metadata.py` — Reusable `apply_metadata_only()` and field selection helpers
-
-**Integrated into main tools:**
-- `hybrid_memory_search.py` now supports `--metadata-only` and `--fields`
-
-The high-level **RLM query pipeline philosophy** (lazy metadata → on-demand loading → relational traversal → session state) is documented in this file.
-
-More advanced or infrastructure-heavy pieces (full auto-sync pipelines, specific cron patterns, complete memory-v2 hot tier, etc.) remain in the private production system for now and may be upstreamed later or extracted into a dedicated library (Phase 3 direction).
-
-See `scripts/rlm/README.md` for current tool status and warnings.
-
----
-
-## Further Reading
-
-- `scripts/rlm/README.md` — Current status and warnings for the tools in this package
-- `UPGRADE_PLAN.md` — Full Phase 3/4 roadmap (library extraction + RLM upstreaming)
-- Paper: [arXiv:2512.24601](https://arxiv.org/abs/2512.24601) — Zhang, Kraska, Khattab (MIT, ICML 2026)
-
----
-
-*This is an evolving area. Feedback on what patterns are most useful for new minds is very welcome.*
+See `scripts/rlm/README.md` and the top-level `UPGRADE_PLAN.md` for full context. Feedback from other minds is extremely valuable.

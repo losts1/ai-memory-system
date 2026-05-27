@@ -15,6 +15,8 @@ Usage examples:
     python3 neo4j_learn_sync.py --days 7 --full
     python3 neo4j_learn_sync.py --extract-params
     python3 neo4j_learn_sync.py --rebuild-graph
+    python3 neo4j_learn_sync.py --assistant Weft
+    python3 neo4j_learn_sync.py --assistant Weft --mind   # --mind is alias for --assistant
 
 ================================================================================
 PHASE 4 — ADVANCED RLM TOOLING (EXPERIMENTAL)
@@ -32,10 +34,13 @@ See UPGRADE_PLAN.md and scripts/rlm/README.md for context.
 """
 
 import argparse
+import hashlib
+import json
 import os
+import pickle
 import re
 import sys
-import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -54,17 +59,22 @@ if not NEO4J_PASSWORD:
     print("ERROR: NEO4J_PASSWORD not set in .env.neo4j")
     sys.exit(1)
 
-# Optional: embedding index for semantic search
+# Optional: embedding index for semantic search (Phase 4 RLM)
 EMBEDDING_INDEX_AVAILABLE = False
 NEO4J_VECTOR_AVAILABLE = False
+
 try:
-    sys.path.insert(0, str(Path(__file__).parent))
     from hybrid_memory_search import EmbeddingIndex, FAISS_AVAILABLE, REQUESTS_AVAILABLE
     EMBEDDING_INDEX_AVAILABLE = FAISS_AVAILABLE and REQUESTS_AVAILABLE
 except ImportError:
-    pass
+    # Try relative import if running from within the package
+    try:
+        from ..hybrid_memory_search import EmbeddingIndex, FAISS_AVAILABLE, REQUESTS_AVAILABLE
+        EMBEDDING_INDEX_AVAILABLE = FAISS_AVAILABLE and REQUESTS_AVAILABLE
+    except ImportError:
+        pass
 
-# Optional: Neo4j vector index
+# Optional: requests for direct vector index updates
 try:
     import requests
     NEO4J_VECTOR_AVAILABLE = True
@@ -75,6 +85,145 @@ except ImportError:
 def get_driver():
     """Create a Neo4j driver using the standard public package pattern."""
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+
+
+def _load_sync_state(force_full: bool = False) -> dict:
+    """Load the learn sync state file, or return a fresh state if --full or file missing."""
+    if STATE_FILE.exists() and not force_full:
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            print("Warning: corrupt sync state file, starting fresh", file=sys.stderr)
+    return {'last_sync': None, 'synced_files': []}
+
+
+def _find_memory_files_to_sync(memory_dir: Path, cutoff: datetime, already_synced: list[str]) -> list[Path]:
+    """Find daily + learner session files that are new or within the time window."""
+    memory_files = []
+
+    # Daily files: YYYY-MM-DD.md
+    for f in memory_dir.glob('*.md'):
+        if re.match(r'\d{4}-\d{2}-\d{2}\.md$', f.name):
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            if mtime > cutoff or f.name not in already_synced:
+                memory_files.append(f)
+
+    # Learner session archives
+    learner_sessions_dir = memory_dir / 'learner-sessions'
+    if learner_sessions_dir.exists():
+        for f in learner_sessions_dir.glob('*.md'):
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            if mtime > cutoff and f.name not in already_synced:
+                memory_files.append(f)
+
+    return memory_files
+
+
+def _post_process_graph(session, driver) -> None:
+    """Run post-sync graph maintenance: word frequencies, related fact linking, orphaned word cleanup."""
+    # Update word frequencies (for stopwords filtering)
+    session.run("""
+        MATCH (w:Word)<-[:HAS_WORD]-(f:Fact)
+        WITH w, count(DISTINCT f) AS df
+        SET w.df = df
+    """)
+
+    # Link related facts (using Word index, tighter params to reduce noise)
+    session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
+
+    # Cleanup orphaned Word nodes
+    session.execute_write(cleanup_orphaned_words)
+
+
+def _update_indexes_and_optional_extraction(topics: list, driver, extract_params: bool) -> None:
+    """Update embedding/vector indexes and optionally run parameter extraction."""
+    if EMBEDDING_INDEX_AVAILABLE:
+        update_embedding_index(topics)
+
+    if NEO4J_VECTOR_AVAILABLE:
+        update_neo4j_vector(topics, driver)
+
+    if extract_params:
+        print("\nRunning parameter extraction...")
+        try:
+            from neo4j_param_extract import run_extraction, load_all_facts
+            all_facts = load_all_facts(driver)
+            run_extraction(driver, all_facts)
+        except ImportError:
+            print("Warning: neo4j_param_extract.py not found, skipping param extraction", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: param extraction failed: {e}", file=sys.stderr)
+
+
+def _save_sync_state(state: dict, memory_files: list[Path]) -> None:
+    """Persist the list of scanned files so we don't re-process them unnecessarily."""
+    state['last_sync'] = datetime.now().isoformat()
+    state['synced_files'].extend(f.name for f in memory_files)
+    state['synced_files'] = list(set(state['synced_files']))
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def _prepare_embedding_text(key_points: list[str]) -> str | None:
+    """Build a compact text blob from the first few key points for embedding."""
+    if not key_points:
+        return None
+    parts = [kp for kp in key_points[:5] if kp and kp.strip()]
+    text = ' '.join(parts)
+    return text.strip() or None
+
+
+def _build_fact_metadata(topic: dict) -> dict:
+    """Construct the metadata dict used for both FAISS and Neo4j vector paths."""
+    name = topic.get('name', '')
+    return {
+        'name': name,
+        'source_file': topic.get('source_file', ''),
+        'key_points': topic.get('key_points', [])[:5],
+        'summary': (topic.get('summary') or '')[:200],
+    }
+
+
+def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir: Path):
+    """Fetch embedding with disk caching + basic retry. Returns embedding list or None."""
+    import hashlib
+    import pickle
+    import time
+
+    text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
+    cache_file = cache_dir / f'{model}_{text_hash}.pkl'
+
+    if cache_file.exists():
+        try:
+            with open(cache_file, 'rb') as f:
+                return pickle.load(f)
+        except Exception:
+            pass  # corrupt cache — re-fetch
+
+    last_exc = None
+    for attempt in range(2):  # minimal retry for transient Ollama / network hiccups
+        try:
+            response = requests.post(
+                f'{ollama_url}/api/embeddings',
+                json={'model': model, 'prompt': text[:2000]},
+                timeout=30
+            )
+            response.raise_for_status()
+            embedding = response.json().get('embedding')
+
+            if embedding:
+                try:
+                    with open(cache_file, 'wb') as f:
+                        pickle.dump(embedding, f)
+                except Exception:
+                    pass
+            return embedding
+        except Exception as e:
+            last_exc = e
+            if attempt == 0:
+                time.sleep(0.5)  # tiny backoff before retry
+
+    # All attempts failed — non-fatal for the overall sync
+    return None
 
 MEMORY_DIR = _WORKSPACE / 'memory'
 STATE_FILE = MEMORY_DIR / 'neo4j_learn_sync_state.json'
@@ -151,6 +300,51 @@ def extract_words(name: str, min_length: int = 3) -> list[str]:
     return list(set(result))
 
 
+def _clean_learned_title(title: str) -> str:
+    """Clean up learned topic titles by removing header prefixes and various time/date annotations."""
+    title = re.sub(r'^(?:Learned|Learner Session):?\s*', '', title)
+    title = re.sub(r'\s*\(Learner Cron[^)]*\)\s*$', '', title)
+    title = re.sub(r'\s*\(Learner\s*$', '', title)
+    title = re.sub(r'\s*\(\d+:\d+\s*[AP]M\s*EDT\)\s*$', '', title)
+    title = re.sub(r'\s*\(\d+:\d+\s*[AP]M\)\s*$', '', title)
+    title = re.sub(r'\s*\(\d+:\d+\s*UTC\)\s*$', '', title)
+    title = re.sub(r'\s*—\s*\d{4}-\d{2}-\d{2}\s+\d+:\d+.*$', '', title)
+    title = re.sub(r'\s*\(\d{4}-\d{2}-\d{2}\)\s*$', '', title)
+    return title.strip()
+
+
+def _parse_key_points_and_summary(body: str) -> tuple[list[str], str]:
+    """Separate key points (bullet/numbered lists) from summary paragraphs in a learned topic body."""
+    lines = body.split('\n')
+    key_points = []
+    summary_lines = []
+    in_list = False
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        if line.startswith('-') or re.match(r'^\d+\.', line):
+            point = re.sub(r'^[-\d\.]+\s*', '', line).strip()
+            if point:
+                key_points.append(point)
+            in_list = True
+        elif in_list and not line.startswith('#') and not line.startswith('**'):
+            if key_points and not line.startswith('|'):
+                pass  # continuation of previous point (currently ignored for simplicity)
+            summary_lines.append(line)
+        else:
+            summary_lines.append(line)
+            in_list = False
+
+    summary = ' '.join(summary_lines[:3])
+    if len(summary) > 500:
+        summary = summary[:497] + '...'
+
+    return key_points, summary
+
+
 def parse_learned_topics(content: str, filepath: Path) -> list[dict]:
     """Extract learned topics from a memory file.
 
@@ -184,49 +378,9 @@ def parse_learned_topics(content: str, filepath: Path) -> list[dict]:
         if not body:
             continue
         
-        # Extract key points (lines starting with - or numbered lists)
-        lines = body.split('\n')
-        key_points = []
-        summary_lines = []
+        key_points, summary = _parse_key_points_and_summary(body)
         
-        in_list = False
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Check if it's a list item
-            if line.startswith('-') or re.match(r'^\d+\.', line):
-                # Clean up the list item
-                point = re.sub(r'^[-\d\.]+\s*', '', line).strip()
-                if point:
-                    key_points.append(point)
-                in_list = True
-            elif in_list and not line.startswith('#') and not line.startswith('**'):
-                # Continuation of previous point or regular paragraph
-                if key_points and not line.startswith('|'):  # Skip tables
-                    # Append to last point if it looks like continuation
-                    pass
-                summary_lines.append(line)
-            else:
-                summary_lines.append(line)
-                in_list = False
-        
-        # Create summary from non-list content (first paragraph, truncated)
-        summary = ' '.join(summary_lines[:3])  # First 3 non-list lines
-        if len(summary) > 500:
-            summary = summary[:497] + '...'
-        
-        # Clean title: remove header prefixes and trailing time annotations
-        title = re.sub(r'^(?:Learned|Learner Session):?\s*', '', title)
-        title = re.sub(r'\s*\(Learner Cron[^)]*\)\s*$', '', title)  # Remove "(Learner Cron)" suffix
-        title = re.sub(r'\s*\(Learner\s*$', '', title)   # Remove trailing "(Learner"
-        title = re.sub(r'\s*\(\d+:\d+\s*[AP]M\s*EDT\)\s*$', '', title)  # Remove "(7:00 PM EDT)"
-        title = re.sub(r'\s*\(\d+:\d+\s*[AP]M\)\s*$', '', title)       # Remove "(7:00 PM)"
-        title = re.sub(r'\s*\(\d+:\d+\s*UTC\)\s*$', '', title)          # Remove "(20:30 UTC)"
-        title = re.sub(r'\s*—\s*\d{4}-\d{2}-\d{2}\s+\d+:\d+.*$', '', title)  # Remove "— 2026-04-07 16:30 EDT"
-        title = re.sub(r'\s*\(\d{4}-\d{2}-\d{2}\)\s*$', '', title)     # Remove "(2026-03-10)" date suffix
-        title = title.strip()
+        title = _clean_learned_title(title)
         if not title:
             title = 'Untitled Topic'
         
@@ -241,39 +395,56 @@ def parse_learned_topics(content: str, filepath: Path) -> list[dict]:
     return topics
 
 
-def sync_fact(tx, topic: dict) -> bool:
-    """Create or update a Fact node in Neo4j with Word index."""
+def sync_fact(tx, topic: dict, assistant: str | None = None) -> bool:
+    """Create or update a Fact node in Neo4j with Word index.
+
+    If assistant is provided (Phase 2 multi-tenancy), ensures the Assistant node
+    exists and tags the Fact with assistant=<name>.
+    """
     try:
         words = extract_words(topic['name'])
-        
-        # Create/update Fact node and delete old HAS_WORD edges
-        # created_at only set on first creation (coalesce preserves existing)
-        result = tx.run("""
-            MERGE (f:Fact {name: $name})
+
+        params = {
+            'name': topic['name'],
+            'summary': topic['summary'],
+            'key_points': topic['key_points'],
+            'source_file': topic['source_file'],
+            'created_at': topic['created_at'],
+        }
+        set_clause = """
             SET f.summary = $summary,
                 f.key_points = $key_points,
                 f.source_file = $source_file,
                 f.created_at = coalesce(f.created_at, $created_at),
                 f.updated_at = $created_at
+        """
+        if assistant:
+            set_clause += ", f.assistant = $assistant"
+            params['assistant'] = assistant
+
+        result = tx.run(f"""
+            MERGE (f:Fact {{name: $name}})
+            {set_clause}
             WITH f
             OPTIONAL MATCH (f)-[old:HAS_WORD]->(:Word)
             DELETE old
             WITH f
-            MERGE (s:Source {name: $source_file})
+            MERGE (s:Source {{name: $source_file}})
             MERGE (f)-[:FROM_SOURCE]->(s)
             RETURN f.name as name
-        """, 
-            name=topic['name'],
-            summary=topic['summary'],
-            key_points=topic['key_points'],
-            source_file=topic['source_file'],
-            created_at=topic['created_at']
-        )
-        
+        """, **params)
+
         if not result.single():
             return False
-        
-        # Create Word nodes and HAS_WORD edges
+
+        # Assistant node (additive, idempotent)
+        if assistant:
+            tx.run("""
+                MERGE (a:Assistant {id: $assistant})
+                ON CREATE SET a.name = $assistant, a.type = 'submind', a.created_at = datetime()
+            """, assistant=assistant)
+
+        # Word index edges (unchanged)
         if words:
             tx.run("""
                 MATCH (f:Fact {name: $name})
@@ -281,7 +452,7 @@ def sync_fact(tx, topic: dict) -> bool:
                 MERGE (w:Word {text: word})
                 MERGE (f)-[:HAS_WORD]->(w)
             """, name=topic['name'], words=words)
-        
+
         return True
     except Exception as e:
         print(f"Error syncing topic '{topic.get('name', 'unknown')}': {e}")
@@ -384,6 +555,8 @@ def main():
                         help='Run parameter extraction (SHARES_PARAMETER / PREREQUISITE_OF) after syncing')
     parser.add_argument('--rebuild-graph', action='store_true',
                         help='Delete all RELATED_TO edges and rebuild from current Word index (no new sync needed)')
+    parser.add_argument('--assistant', '--mind', dest='assistant',
+                        help='Tag created Fact nodes with this assistant/mind name (Phase 2 multi-tenancy)')
     args = parser.parse_args()
 
     # --rebuild-graph: just clean + rebuild RELATED_TO, no file sync
@@ -392,14 +565,12 @@ def main():
         try:
             with driver.session() as session:
                 print("Rebuilding RELATED_TO graph with tighter params (max_df_ratio=0.1, min_shared=2)...")
-                # Delete polluted Word nodes (high-frequency stopwords that slipped in)
                 session.run("""
                     MATCH (w:Word)
                     WHERE w.text IN $stop_words
                     DETACH DELETE w
                 """, stop_words=list(STOP_WORDS))
                 print("  Removed stopword Word nodes")
-                # Rebuild
                 session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
                 session.execute_write(cleanup_orphaned_words)
                 result = session.run("MATCH ()-[r:RELATED_TO]->() RETURN count(r) AS cnt")
@@ -409,30 +580,14 @@ def main():
             driver.close()
         return
 
-    # Load state
-    if STATE_FILE.exists() and not args.full:
-        state = json.loads(STATE_FILE.read_text())
-    else:
-        state = {'last_sync': None, 'synced_files': []}
+    if args.assistant:
+        print(f"Tagging new Facts with assistant: {args.assistant}")
+
+    state = _load_sync_state(args.full)
     
     # Find memory files from the requested window
     cutoff = datetime.now() - timedelta(days=args.days)
-    memory_files = []
-
-    # Daily files: YYYY-MM-DD.md
-    for f in MEMORY_DIR.glob('*.md'):
-        if re.match(r'\d{4}-\d{2}-\d{2}\.md$', f.name):
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
-            if mtime > cutoff or f.name not in state.get('synced_files', []):
-                memory_files.append(f)
-
-    # Learner session archives: memory/learner-sessions/YYYY-MM-DD*.md
-    learner_sessions_dir = MEMORY_DIR / 'learner-sessions'
-    if learner_sessions_dir.exists():
-        for f in learner_sessions_dir.glob('*.md'):
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
-            if mtime > cutoff and f.name not in state.get('synced_files', []):
-                memory_files.append(f)
+    memory_files = _find_memory_files_to_sync(MEMORY_DIR, cutoff, state.get('synced_files', []))
     
     if not memory_files:
         print("No new memory files to sync")
@@ -470,37 +625,15 @@ def main():
             synced = 0
             with driver.session() as session:
                 for topic in all_topics:
-                    if session.execute_write(sync_fact, topic):
+                    if session.execute_write(sync_fact, topic, args.assistant):
                         synced += 1
                         print(f"  ✓ {topic['name']}")
 
-                # Update word frequencies (for stopwords filtering)
-                session.run("""
-                    MATCH (w:Word)<-[:HAS_WORD]-(f:Fact)
-                    WITH w, count(DISTINCT f) AS df
-                    SET w.df = df
-                """)
-
-                # Link related facts (using Word index, tighter params to reduce noise)
-                session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
-
-                # Cleanup orphaned Word nodes
-                session.execute_write(cleanup_orphaned_words)
+                _post_process_graph(session, driver)
 
             print(f"\nSynced {synced} topics to Neo4j")
 
-            # Update embedding index for semantic search
-            if EMBEDDING_INDEX_AVAILABLE:
-                update_embedding_index(all_topics)
-
-            # Update Neo4j vector index for graph-aware search
-            if NEO4J_VECTOR_AVAILABLE:
-                update_neo4j_vector(all_topics, driver)
-
-            # Optionally run parameter extraction for newly synced facts
-            if args.extract_params:
-                print("\nRunning parameter extraction...")
-                _try_run_parameter_extraction(driver)
+            _update_indexes_and_optional_extraction(all_topics, driver, args.extract_params)
         else:
             print("No new topics to sync")
 
@@ -514,42 +647,22 @@ def update_embedding_index(topics: list) -> int:
     """Update FAISS embedding index with new Facts. Returns number added."""
     if not EMBEDDING_INDEX_AVAILABLE:
         return 0
-    
+
     try:
         embedding_index = EmbeddingIndex()
-        
-        # Add new topics to index
         added = 0
         for topic in topics:
-            name = topic.get('name', '')
-            key_points = topic.get('key_points', [])
-            source_file = topic.get('source_file', '')
-            summary = topic.get('summary', '')
-            
-            if not key_points:
+            text = _prepare_embedding_text(topic.get('key_points', []))
+            if not text:
                 continue
-            
-            # Use key_points for embedding
-            text_parts = [kp for kp in key_points[:5] if kp]
-            if not text_parts:
-                continue
-            
-            text = ' '.join(text_parts)
-            doc_id = f"fact:{name}"
-            metadata = {
-                'name': name,
-                'source_file': source_file,
-                'key_points': key_points[:5],
-                'summary': summary[:200] if summary else ''
-            }
-            
+            doc_id = f"fact:{topic.get('name', '')}"
+            metadata = _build_fact_metadata(topic)
             if embedding_index.add_document(doc_id, text, metadata):
                 added += 1
-        
+
         if added > 0:
             embedding_index._save_index()
             print(f"  Added {added} facts to FAISS embedding index")
-        
         return added
     except Exception as e:
         print(f"Warning: Could not update embedding index: {e}", file=sys.stderr)
@@ -560,91 +673,48 @@ def update_neo4j_vector(topics: list, driver) -> int:
     """Update Neo4j Fact.embedding for vector search. Returns number updated."""
     if not NEO4J_VECTOR_AVAILABLE:
         return 0
-    
+
     try:
-        import hashlib
-        import pickle
-        from pathlib import Path
-        
         cache_dir = _WORKSPACE / 'memory' / 'embeddings'
         model = os.environ.get('EMBEDDING_MODEL', 'nomic-embed-text')
         ollama_url = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-        
-        updated = 0
-        
-        # Batch get embeddings
-        texts = []
-        names = []
+
+        # Collect texts + names using shared prep helper
+        texts, names = [], []
         for topic in topics:
-            key_points = topic.get('key_points', [])
-            if not key_points:
-                continue
-            text = ' '.join([kp for kp in key_points[:5] if kp])
-            if text.strip():
+            text = _prepare_embedding_text(topic.get('key_points', []))
+            if text:
                 texts.append(text)
                 names.append(topic.get('name', ''))
-        
+
         if not texts:
             return 0
-        
-        # Get embeddings (with cache)
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
-        def get_embedding(i: int, text: str):
-            text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
-            cache_file = cache_dir / f'{model}_{text_hash}.pkl'
-            
-            # Check cache
-            if cache_file.exists():
-                try:
-                    with open(cache_file, 'rb') as f:
-                        return (i, pickle.load(f))
-                except:
-                    pass
-            
-            # Get from API
-            try:
-                response = requests.post(
-                    f'{ollama_url}/api/embeddings',
-                    json={'model': model, 'prompt': text[:2000]},
-                    timeout=30
-                )
-                response.raise_for_status()
-                embedding = response.json().get('embedding')
-                
-                if embedding:
-                    with open(cache_file, 'wb') as f:
-                        pickle.dump(embedding, f)
-                
-                return (i, embedding)
-            except:
-                return (i, None)
-        
+
         embeddings = [None] * len(texts)
-        
-        # Concurrent embedding requests
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(get_embedding, i, text): i for i, text in enumerate(texts)}
+            futures = {executor.submit(_get_embedding_with_cache, text, model, ollama_url, cache_dir): i
+                       for i, text in enumerate(texts)}
             for future in as_completed(futures):
-                i, embedding = future.result()
-                embeddings[i] = embedding
-        
-        # Update Neo4j
+                i = futures[future]
+                embeddings[i] = future.result()
+
+        # Apply to graph (best-effort per fact)
+        updated = 0
         with driver.session() as session:
             for name, embedding in zip(names, embeddings):
-                if embedding:
-                    try:
-                        session.run('''
-                            MATCH (f:Fact {name: $name})
-                            SET f.embedding = $embedding
-                        ''', name=name, embedding=embedding)
-                        updated += 1
-                    except Exception as e:
-                        print(f"  Error updating {name}: {e}")
-        
+                if not embedding:
+                    continue
+                try:
+                    session.run('''
+                        MATCH (f:Fact {name: $name})
+                        SET f.embedding = $embedding
+                    ''', name=name, embedding=embedding)
+                    updated += 1
+                except Exception as e:
+                    print(f"  Error updating embedding for {name}: {e}")
+
         if updated > 0:
             print(f"  Updated {updated} facts in Neo4j vector index")
-        
         return updated
     except Exception as e:
         print(f"Warning: Could not update Neo4j vector index: {e}", file=sys.stderr)
