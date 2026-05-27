@@ -120,6 +120,42 @@ def _format_node(record_name: str, record: Dict, fields: List[str], metadata_onl
     return node
 
 
+def _build_traversal_cypher(rel_type: str, depth: int, fields: List[str], metadata_only: bool, needs_filter: bool) -> str:
+    """Build the Cypher query for neighborhood traversal."""
+    need_summary = metadata_only or 'summary' in fields or 'teaser' in fields
+    need_kp = metadata_only or 'key_points' in fields or 'kp_count' in fields or needs_filter
+    need_words = metadata_only or 'top_words' in fields or 'related_count' in fields or needs_filter
+
+    return_parts = ['f.name AS name']
+    if need_summary:
+        return_parts.append('f.summary AS summary')
+    if need_kp:
+        return_parts.append('f.key_points AS key_points')
+    if need_words:
+        return_parts.append('COUNT { MATCH (f)-[:RELATED_TO]->() } AS related_count')
+
+    return_clause = ', '.join(return_parts)
+    words_clause = ', word_list[0..5] AS top_words' if need_words else ''
+
+    return f"""
+        MATCH (start:Fact {{name: $start_name}})-[:{rel_type}*1..{depth}]-(f:Fact)
+        WHERE f.name <> $start_name
+        WITH DISTINCT f
+        OPTIONAL MATCH (f)-[:HAS_WORD]->(w:Word)
+        WITH f, collect(w.text) AS word_list
+        RETURN {return_clause}{words_clause}
+        LIMIT $max_nodes
+    """
+
+
+def _node_matches_filter(rec: Dict, filter_word: str) -> bool:
+    """Check if a record matches the filter word in top_words or key_points."""
+    top_words = rec.get('top_words') or []
+    kp_text = ' '.join(rec.get('key_points') or [])
+    fw = filter_word.lower()
+    return fw in [w.lower() for w in top_words] or fw in kp_text.lower()
+
+
 def traverse_neighborhood(
     driver,
     start: str,
@@ -137,45 +173,51 @@ def traverse_neighborhood(
     """
     depth = min(depth, MAX_DEPTH_CAP)
 
-    # Determine which properties to fetch
-    need_summary = metadata_only or 'summary' in fields or 'teaser' in fields
-    # Also fetch key_points when filter_word is active so we can match against them
-    need_kp = metadata_only or 'key_points' in fields or 'kp_count' in fields or bool(filter_word)
-    # Also fetch words when filter_word is active
-    need_words = metadata_only or 'top_words' in fields or 'related_count' in fields or bool(filter_word)
-
-    # BFS via Cypher with variable-length path
-    # We use RELATED_TO (or user-specified relationship) between Fact nodes only
     rel_type = relationship if relationship else 'RELATED_TO'
-
-    # Safety: only allow known relationship types to prevent Cypher injection
     allowed_rels = {'RELATED_TO', 'HAS_WORD', 'SHARES_PARAMETER', 'PREREQUISITE_OF'}
     if rel_type not in allowed_rels:
         return {'success': False, 'error': f'Unknown relationship type: {rel_type}. Allowed: {sorted(allowed_rels)}'}
 
-    # Build WITH clause selecting needed fields, then OPTIONAL MATCH words separately
-    # to avoid [:5] slice issue on list pattern comprehensions in older Neo4j versions
-    with_parts = ['f']
-    return_parts = ['f.name AS name']
-    if need_summary:
-        return_parts.append('f.summary AS summary')
-    if need_kp:
-        return_parts.append('f.key_points AS key_points')
-    if need_words:
-        return_parts.append('COUNT { MATCH (f)-[:RELATED_TO]->() } AS related_count')
+    cypher = _build_traversal_cypher(rel_type, depth, fields, metadata_only, bool(filter_word))
 
-    return_clause = ', '.join(return_parts)
-    words_clause = ', word_list[0..5] AS top_words' if need_words else ''
+    nodes = []
+    visited = {start}
 
-    cypher = f"""
-        MATCH (start:Fact {{name: $start_name}})-[:{rel_type}*1..{depth}]-(f:Fact)
-        WHERE f.name <> $start_name
-        WITH DISTINCT f
-        OPTIONAL MATCH (f)-[:HAS_WORD]->(w:Word)
-        WITH f, collect(w.text) AS word_list
-        RETURN {return_clause}{words_clause}
-        LIMIT $max_nodes
-    """
+    with driver.session() as session:
+        check = session.run("MATCH (f:Fact {name: $name}) RETURN f.name LIMIT 1", {'name': start})
+        if not check.single():
+            return {'success': False, 'error': f'Fact node not found: {start!r}'}
+
+        try:
+            records = session.run(cypher, {'start_name': start, 'max_nodes': max_nodes})
+            for record in records:
+                node_name = record['name']
+                if node_name in visited:
+                    continue
+                visited.add(node_name)
+
+                rec_dict = dict(record)
+
+                if filter_word:
+                    if not _node_matches_filter(rec_dict, filter_word):
+                        continue
+
+                nodes.append(_format_node(node_name, rec_dict, fields, metadata_only))
+
+                if len(nodes) >= max_nodes:
+                    break
+
+        except Exception as e:
+            return {'success': False, 'error': f'Traversal query failed: {e}'}
+
+    return {
+        'success': True,
+        'start': start,
+        'depth': depth,
+        'relationship': rel_type,
+        'total_nodes': len(nodes),
+        'nodes': nodes
+    }
 
     nodes: List[Dict[str, Any]] = []
     visited: Set[str] = {start}
