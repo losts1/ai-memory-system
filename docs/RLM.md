@@ -105,33 +105,66 @@ The difference becomes especially noticeable in long-running projects with hundr
 Traditional RAG is mostly **pull-based and stateless**.
 
 RLM-style memory is more like having an external working memory that the agent can:
-- Inspect at different levels of detail
-- Navigate relationally
-- Maintain state about across multiple turns
+- Inspect at different levels of detail (metadata → specific fields → full content)
+- Navigate relationally (graph traversal + parameter tracing)
+- Maintain state across turns (what have I already loaded this session?)
 
-This is especially valuable for:
-- Deep technical or research domains
-- Long-running projects with many interconnected concepts
-- Agents that need to do real reasoning over their own knowledge base
+This becomes especially valuable once your knowledge base grows beyond what comfortably fits in context.
+
+---
+
+## Recommended RLM Query Pattern
+
+When working with a mature graph, the following interactive pattern tends to produce much higher signal density than "retrieve top-k and stuff everything into the prompt":
+
+1. **Browse (metadata only)**  
+   Start cheap. See what exists without loading full content.
+   ```bash
+   python3 hybrid_memory_search.py "your topic" --metadata-only --max-results 15
+   ```
+
+2. **Decide**  
+   Review teasers, `kp_count`, `related_count`, `top_words`. Choose what actually looks promising.
+
+3. **Load on demand**  
+   Pull only what you need.
+   ```bash
+   python3 hybrid_memory_search.py "x" --load-fact "Specific Fact Name"
+   # or
+   python3 hybrid_memory_search.py "x" --fields name,key_points,summary
+   ```
+
+4. **Trace / Traverse**  
+   Follow semantic relationships instead of flat similarity.
+   ```bash
+   python3 neo4j_traverse.py --start "Promising Fact" --parameter "your-concept" --depth 2
+   ```
+
+5. **Maintain session state (optional but powerful)**  
+   Use `memory_state.py` so the system remembers what you've already loaded in the current conversation and can suggest the next most useful pending facts.
+
+This pattern turns retrieval from a single blunt operation into a steerable, multi-step reasoning process.
 
 ---
 
 ## Current Status in the Public Package (Phase 4)
 
-As of late May 2026, the following Phase 4 RLM tools have been seeded into the public package under `scripts/rlm/`:
+As of late May 2026, core pieces of the RLM pattern have been upstreamed into the public package:
 
-- `neo4j_traverse.py` — Graph traversal with powerful `--parameter` tracing mode
-- `memory_state.py` — Per-session lazy loading state tracking (`pending` vs `loaded` facts)
-- `neo4j_learn_sync.py` — Turns daily/learner notes into high-quality Facts + Word index + embeddings
-- `metadata.py` — Core helpers for `apply_metadata_only()` and field selection (lazy loading foundation)
+**Available in `scripts/rlm/`:**
+- `neo4j_traverse.py` — Graph traversal + `--parameter` tracing
+- `memory_state.py` — Per-session lazy state tracking
+- `neo4j_learn_sync.py` — High-quality Fact + Word index ingestion from notes
+- `metadata.py` — Reusable `apply_metadata_only()` and field selection helpers
 
-The main `hybrid_memory_search.py` has also been enhanced with `--metadata-only` and `--fields` support.
+**Integrated into main tools:**
+- `hybrid_memory_search.py` now supports `--metadata-only` and `--fields`
 
-These tools are still **experimental** and carry the "Phase 4 — Advanced RLM Tooling" warning. They are being cleaned and adapted incrementally (following the same pattern as the multi-tenancy work in Phase 2).
+The high-level **RLM query pipeline philosophy** (lazy metadata → on-demand loading → relational traversal → session state) is documented in this file.
 
-See the `scripts/rlm/` directory (especially its README) for usage and caveats.
+More advanced or infrastructure-heavy pieces (full auto-sync pipelines, specific cron patterns, complete memory-v2 hot tier, etc.) remain in the private production system for now and may be upstreamed later or extracted into a dedicated library (Phase 3 direction).
 
-See [docs/SUBMINDS.md](./SUBMINDS.md) for how new minds can attach to and benefit from an existing graph.
+See `scripts/rlm/README.md` for current tool status and warnings.
 
 ---
 

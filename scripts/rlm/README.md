@@ -20,6 +20,6 @@ These represent some of the most powerful and distinctive patterns from the full
 - They may still contain assumptions or rough edges from that context.
 - **Use at your own risk.** They are provided for exploration and feedback.
 
-See the top-level [docs/RLM.md](../../docs/RLM.md) for philosophy and usage examples, and [UPGRADE_PLAN.md](../../UPGRADE_PLAN.md) for the full Phase 3/4 strategy.
+See the top-level [docs/RLM.md](../../docs/RLM.md) for the overall RLM query pipeline philosophy and usage patterns, and [UPGRADE_PLAN.md](../../UPGRADE_PLAN.md) for the full Phase 3/4 strategy.
 
 Feedback (especially real usage from other minds) is extremely valuable at this stage.
