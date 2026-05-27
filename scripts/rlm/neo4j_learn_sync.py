@@ -32,10 +32,13 @@ See UPGRADE_PLAN.md and scripts/rlm/README.md for context.
 """
 
 import argparse
+import hashlib
+import json
 import os
+import pickle
 import re
 import sys
-import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -156,6 +159,44 @@ def _save_sync_state(state: dict, memory_files: list[Path]) -> None:
     state['synced_files'].extend(f.name for f in memory_files)
     state['synced_files'] = list(set(state['synced_files']))
     STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir: Path):
+    """Fetch embedding with disk caching. Returns (success, embedding or None)."""
+    import hashlib
+    import pickle
+
+    text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
+    cache_file = cache_dir / f'{model}_{text_hash}.pkl'
+
+    # Check cache
+    if cache_file.exists():
+        try:
+            with open(cache_file, 'rb') as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+
+    # Get from Ollama
+    try:
+        response = requests.post(
+            f'{ollama_url}/api/embeddings',
+            json={'model': model, 'prompt': text[:2000]},
+            timeout=30
+        )
+        response.raise_for_status()
+        embedding = response.json().get('embedding')
+
+        if embedding:
+            try:
+                with open(cache_file, 'wb') as f:
+                    pickle.dump(embedding, f)
+            except Exception:
+                pass  # Cache write failure is non-fatal
+
+        return embedding
+    except Exception:
+        return None
 
 MEMORY_DIR = _WORKSPACE / 'memory'
 STATE_FILE = MEMORY_DIR / 'neo4j_learn_sync_state.json'
@@ -607,10 +648,6 @@ def update_neo4j_vector(topics: list, driver) -> int:
         return 0
     
     try:
-        import hashlib
-        import pickle
-        from pathlib import Path
-        
         cache_dir = _WORKSPACE / 'memory' / 'embeddings'
         model = os.environ.get('EMBEDDING_MODEL', 'nomic-embed-text')
         ollama_url = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
@@ -632,44 +669,11 @@ def update_neo4j_vector(topics: list, driver) -> int:
         if not texts:
             return 0
         
-        # Get embeddings (with cache)
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
-        def get_embedding(i: int, text: str):
-            text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
-            cache_file = cache_dir / f'{model}_{text_hash}.pkl'
-            
-            # Check cache
-            if cache_file.exists():
-                try:
-                    with open(cache_file, 'rb') as f:
-                        return (i, pickle.load(f))
-                except:
-                    pass
-            
-            # Get from API
-            try:
-                response = requests.post(
-                    f'{ollama_url}/api/embeddings',
-                    json={'model': model, 'prompt': text[:2000]},
-                    timeout=30
-                )
-                response.raise_for_status()
-                embedding = response.json().get('embedding')
-                
-                if embedding:
-                    with open(cache_file, 'wb') as f:
-                        pickle.dump(embedding, f)
-                
-                return (i, embedding)
-            except:
-                return (i, None)
-        
         embeddings = [None] * len(texts)
         
-        # Concurrent embedding requests
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(get_embedding, i, text): i for i, text in enumerate(texts)}
+            futures = {executor.submit(_get_embedding_with_cache, text, model, ollama_url, cache_dir): i 
+                       for i, text in enumerate(texts)}
             for future in as_completed(futures):
                 i, embedding = future.result()
                 embeddings[i] = embedding
