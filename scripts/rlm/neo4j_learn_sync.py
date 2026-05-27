@@ -81,6 +81,38 @@ def get_driver():
     """Create a Neo4j driver using the standard public package pattern."""
     return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
+
+def _load_sync_state(force_full: bool = False) -> dict:
+    """Load the learn sync state file, or return a fresh state if --full or file missing."""
+    if STATE_FILE.exists() and not force_full:
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except Exception:
+            print("Warning: corrupt sync state file, starting fresh", file=sys.stderr)
+    return {'last_sync': None, 'synced_files': []}
+
+
+def _find_memory_files_to_sync(memory_dir: Path, cutoff: datetime, already_synced: list[str]) -> list[Path]:
+    """Find daily + learner session files that are new or within the time window."""
+    memory_files = []
+
+    # Daily files: YYYY-MM-DD.md
+    for f in memory_dir.glob('*.md'):
+        if re.match(r'\d{4}-\d{2}-\d{2}\.md$', f.name):
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            if mtime > cutoff or f.name not in already_synced:
+                memory_files.append(f)
+
+    # Learner session archives
+    learner_sessions_dir = memory_dir / 'learner-sessions'
+    if learner_sessions_dir.exists():
+        for f in learner_sessions_dir.glob('*.md'):
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            if mtime > cutoff and f.name not in already_synced:
+                memory_files.append(f)
+
+    return memory_files
+
 MEMORY_DIR = _WORKSPACE / 'memory'
 STATE_FILE = MEMORY_DIR / 'neo4j_learn_sync_state.json'
 
@@ -419,30 +451,11 @@ def main():
             driver.close()
         return
 
-    # Load state
-    if STATE_FILE.exists() and not args.full:
-        state = json.loads(STATE_FILE.read_text())
-    else:
-        state = {'last_sync': None, 'synced_files': []}
+    state = _load_sync_state(args.full)
     
     # Find memory files from the requested window
     cutoff = datetime.now() - timedelta(days=args.days)
-    memory_files = []
-
-    # Daily files: YYYY-MM-DD.md
-    for f in MEMORY_DIR.glob('*.md'):
-        if re.match(r'\d{4}-\d{2}-\d{2}\.md$', f.name):
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
-            if mtime > cutoff or f.name not in state.get('synced_files', []):
-                memory_files.append(f)
-
-    # Learner session archives: memory/learner-sessions/YYYY-MM-DD*.md
-    learner_sessions_dir = MEMORY_DIR / 'learner-sessions'
-    if learner_sessions_dir.exists():
-        for f in learner_sessions_dir.glob('*.md'):
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
-            if mtime > cutoff and f.name not in state.get('synced_files', []):
-                memory_files.append(f)
+    memory_files = _find_memory_files_to_sync(MEMORY_DIR, cutoff, state.get('synced_files', []))
     
     if not memory_files:
         print("No new memory files to sync")
