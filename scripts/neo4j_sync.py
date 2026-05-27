@@ -5,10 +5,15 @@ Neo4j Session Sync - Sync Memory Files to Knowledge Graph
 Reads session files and creates/updates Session and Fact nodes in Neo4j.
 Maintains sync state to only process new/modified files.
 
+Supports tagging new data with an `assistant` / mind for multi-tenancy (Phase 2).
+
 Usage:
-    python3 neo4j_sync.py [--full]
+    python3 neo4j_sync.py
+    python3 neo4j_sync.py --assistant Weft
+    python3 neo4j_sync.py --full --assistant Nova
 """
 
+import argparse
 import fcntl
 import hashlib
 import json
@@ -109,8 +114,12 @@ def extract_facts(content: str, source: str) -> list:
     return facts
 
 
-def sync_file(driver, filepath: Path, state: dict) -> dict:
-    """Sync a single session file to Neo4j."""
+def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None) -> dict:
+    """Sync a single session file to Neo4j.
+
+    If assistant is provided, tags the created Session and Fact nodes
+    with assistant=<name> for multi-mind support (Phase 2).
+    """
     file_hash = compute_file_hash(filepath)
     relative_path = filepath.name
 
@@ -141,15 +150,33 @@ def sync_file(driver, filepath: Path, state: dict) -> dict:
 
     try:
         with driver.session() as neo4j_session:
+            # Ensure the Assistant node exists if we're tagging data
+            if assistant:
+                neo4j_session.run(
+                    """
+                    MERGE (a:Assistant {id: $assistant})
+                    ON CREATE SET a.name = $assistant, a.type = 'submind', a.created_at = datetime()
+                    """,
+                    assistant=assistant,
+                )
+
             # Session node — no raw content stored; files are the source of truth
+            session_params = {
+                "id": relative_path,
+                "date": session_date,
+                "source_file": str(filepath),
+            }
+            session_set = "SET s.date = $date, s.source_file = $source_file, s.updated = datetime()"
+            if assistant:
+                session_set += ", s.assistant = $assistant"
+                session_params["assistant"] = assistant
+
             neo4j_session.run(
-                """
-                MERGE (s:Session {id: $id})
-                SET s.date = $date, s.source_file = $source_file, s.updated = datetime()
+                f"""
+                MERGE (s:Session {{id: $id}})
+                {session_set}
                 """,
-                id=relative_path,
-                date=session_date,
-                source_file=str(filepath),
+                **session_params,
             )
 
             embedding_failures = 0
@@ -159,19 +186,27 @@ def sync_file(driver, filepath: Path, state: dict) -> dict:
                     f"{relative_path}:{fact['name']}".encode()
                 ).hexdigest()[:16]
 
+                fact_params = {
+                    "id": fact_id,
+                    "name": fact["name"],
+                    "content": fact["content"][:2000],
+                    "source": fact["source"],
+                    "session_id": relative_path,
+                }
+                fact_set = "SET f.name = $name, f.content = $content, f.source = $source"
+                if assistant:
+                    fact_set += ", f.assistant = $assistant"
+                    fact_params["assistant"] = assistant
+
                 neo4j_session.run(
-                    """
-                    MERGE (f:Fact {id: $id})
-                    SET f.name = $name, f.content = $content, f.source = $source
+                    f"""
+                    MERGE (f:Fact {{id: $id}})
+                    {fact_set}
                     WITH f
-                    MATCH (s:Session {id: $session_id})
+                    MATCH (s:Session {{id: $session_id}})
                     MERGE (f)-[:LEARNED_IN]->(s)
                     """,
-                    id=fact_id,
-                    name=fact["name"],
-                    content=fact["content"][:2000],
-                    source=fact["source"],
-                    session_id=relative_path,
+                    **fact_params,
                 )
 
                 # Generate and store embedding for vector/semantic search
@@ -200,7 +235,7 @@ def sync_file(driver, filepath: Path, state: dict) -> dict:
     }
 
 
-def main():
+def main(assistant: str | None = None):
     uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
     username = os.getenv("NEO4J_USERNAME", "neo4j")
     password = os.getenv("NEO4J_PASSWORD")
@@ -208,6 +243,9 @@ def main():
     if not password:
         print("Error: NEO4J_PASSWORD not set")
         sys.exit(1)
+
+    if assistant:
+        print(f"Tagging all synced data with assistant: {assistant}")
 
     # Prevent concurrent runs
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +275,7 @@ def main():
             if filepath.name.startswith("."):
                 continue
 
-            result = sync_file(driver, filepath, state)
+            result = sync_file(driver, filepath, state, assistant=assistant)
 
             if result["status"] == "synced":
                 synced += 1
@@ -272,6 +310,14 @@ def main():
 
 
 if __name__ == "__main__":
-    if "--full" in sys.argv:
+    parser = argparse.ArgumentParser(description="Sync memory files to Neo4j")
+    parser.add_argument("--full", action="store_true", help="Force full sync (ignore state file)")
+    parser.add_argument("--assistant", "--mind", dest="assistant",
+                        help="Tag all created Fact and Session nodes with this assistant/mind name")
+
+    args = parser.parse_args()
+
+    if args.full:
         os.environ["FULL_SYNC"] = "1"
-    main()
+
+    main(assistant=args.assistant)
