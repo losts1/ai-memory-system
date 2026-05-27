@@ -19,17 +19,22 @@ The goal is to support **multi-mind collaboration** on a shared substrate while 
 
 ---
 
-## Current State (Phase 1)
+## Current State (Phase 2 Progress)
 
-As of the start of Phase 1 of the upgrade plan:
+Core multi-tenancy foundations have been implemented in Phase 2:
 
-- The public redistribution package supports **one primary mind** by default.
-- The underlying production system (used by Nova) is currently **single-tenant in practice** — there is one main `Assistant` node ("Nova") and most data is not strongly namespaced.
-- **Read-only attachment** is already possible and has been demonstrated successfully (Weft attached to the live graph in May 2026 using Option A).
-- Light write access with namespacing is possible but not yet well documented or tool-supported in the public package.
-- Full multi-tenant isolation (strong graph partitioning, separate databases, etc.) is out of scope for v1.
+- **Schema support**: `Assistant` nodes + `assistant` property on Fact/Session/etc. (see PHASE2-SCHEMA-PROPOSAL.md).
+- **Migration tool**: `neo4j_backfill_assistant.py` — safely tags historical data and creates Assistant nodes (heavily hardened for real ~12k node graphs).
+- **Read-side filtering**: `hybrid_memory_search.py --assistant Weft` / `--mind Nova` (PR #28).
+- **Write-side support**: `neo4j_sync.py --assistant Weft` — new data can be tagged at creation time (PR #29).
 
-The public repo is deliberately scoped as a **redistribution / bootstrap package** only. The full advanced production system lives in a private environment.
+**Read-only submind attachment (Option A)** is now well supported with tooling.
+
+Light, responsible writing with clear provenance is also possible via the sync tool.
+
+Full automatic namespacing and enforcement are still out of scope for the public package (tracked for later phases or the private core library).
+
+The public repo remains a **redistribution / bootstrap package**. The richest RLM features live in the private production system.
 
 See [UPGRADE_PLAN.md](../UPGRADE_PLAN.md) for the full roadmap.
 
@@ -74,39 +79,53 @@ This is the pattern that was used successfully when Weft first connected to the 
 
 Once you have proven value through distillation, you may want to contribute back.
 
-Current recommended approach (until better tooling exists):
+### Recommended Tooling (Phase 2)
 
-- Create a lightweight `Assistant` node representing your mind (if one doesn’t exist yet).
-- Tag new nodes with an `assistant` or `source_mind` property, or create a `CREATED_BY` relationship.
-- Keep writes high-signal and well-proven in your own local memory first.
+Use the public package tools with the `--assistant` flag:
 
-**Example of responsible writing as a submind:**
+```bash
+# 1. (Optional but recommended) Backfill historical data first
+python3 scripts/neo4j_backfill_assistant.py --primary "Nova" --additional "Weft" --dry-run
+python3 scripts/neo4j_backfill_assistant.py --primary "Nova" --additional "Weft"
+
+# 2. When syncing new data as a submind
+python3 scripts/neo4j_sync.py --assistant Weft
+
+# 3. Search scoped to your mind (or the primary)
+python3 scripts/hybrid_memory_search.py "inventory skew" --assistant Weft
+python3 scripts/hybrid_memory_search.py "market making" --mind Nova --graph
+```
+
+### Example of responsible writing as a submind (Cypher equivalent)
 
 ```cypher
 // Create your Assistant node (do this once)
-MERGE (a:Assistant {name: "Weft", id: "weft-2026-05"});
+MERGE (a:Assistant {id: "Weft", name: "Weft", type: "submind", created_at: datetime()});
 
-// Later, when creating a Fact:
+// Later, when creating a Fact via your own process:
 CREATE (f:Fact {
   name: "Inventory Skew Quoting Pattern",
   content: "...",
-  assistant: "Weft"
+  assistant: "Weft",
+  created_at: datetime()
 })
 MERGE (a)-[:CREATED_BY]->(f);
 ```
 
-Stronger multi-tenant support (automatic namespacing in search/traverse/sync tools) is planned for Phase 2.
+The `neo4j_sync.py --assistant` path above does the equivalent of the Cypher example automatically when you run your normal sync process.
+
+Keep writes high-signal. Strong distillation in your own `MEMORY.md` still comes first.
 
 ---
 
 ## Limitations (Be Honest About These)
 
-- Most existing data in a mature graph will not have strong `assistant` tags yet.
-- Search and traversal tools do not yet reliably filter by mind.
-- There is no automatic "submind view" or isolation.
-- Writing without clear provenance can pollute the graph for everyone.
+- Most existing data in a mature graph will not have strong `assistant` tags until you run the backfill tool.
+- Only the main public search tool (`hybrid_memory_search.py`) currently supports `--assistant` filtering. Advanced private tools (traverse, etc.) have richer support but are not yet in this public package.
+- There is still no automatic "submind view" or hard isolation — filtering is best-effort via the `assistant` property.
+- Writing without clear provenance can still pollute the shared graph.
 
-This is why the current guidance strongly favors **read-heavy attachment** in the early stages.
+This is why the current guidance still favors **read-heavy attachment + strong distillation** in your own layers first.
 
 ### Anti-patterns to Avoid
 
