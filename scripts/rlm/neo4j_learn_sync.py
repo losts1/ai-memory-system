@@ -500,26 +500,11 @@ def main():
             # Optionally run parameter extraction for newly synced facts
             if args.extract_params:
                 print("\nRunning parameter extraction...")
-                try:
-                    from neo4j_param_extract import run_extraction, load_all_facts
-                    all_facts = load_all_facts(driver)
-                    run_extraction(driver, all_facts)
-                except ImportError:
-                    print(
-                        "Warning: neo4j_param_extract.py not found, skipping param extraction",
-                        file=sys.stderr,
-                    )
-                except Exception as e:
-                    print(f"Warning: param extraction failed: {e}", file=sys.stderr)
+                _try_run_parameter_extraction(driver)
         else:
             print("No new topics to sync")
 
-        # Always persist scanned files to state — prevents O(n) re-scan on every run
-        # even when all topics already exist in Neo4j.
-        state['last_sync'] = datetime.now().isoformat()
-        state['synced_files'].extend(f.name for f in memory_files)
-        state['synced_files'] = list(set(state['synced_files']))  # Dedupe
-        STATE_FILE.write_text(json.dumps(state, indent=2))
+        _save_sync_state(state, memory_files)
             
     finally:
         driver.close()
