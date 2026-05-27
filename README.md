@@ -4,7 +4,20 @@
 
 This package teaches a new AI agent how to build a 5-layer memory system combining markdown files, structured summaries, a Neo4j knowledge graph, and semantic search.
 
+## Status & Roadmap
+
+This repository contains the **public redistribution package** — the clean bootstrap experience you can give to a new AI agent.
+
+Active work to make the system more generic, multi-mind friendly, and reusable is tracked here:
+
+- **[UPGRADE_PLAN.md](./UPGRADE_PLAN.md)**
+- **[DECISIONS.md](./DECISIONS.md)**
+
+Phase 0 (Foundations & Decisions) is complete. Moving to Phase 1.
+
 ---
+
+
 
 ## What You Get
 
@@ -138,13 +151,13 @@ redistribute/
 
 ## Architecture
 
-| Layer | Technology | Purpose |
+| Layer | Technology | Purpose | Notes |
 |-------|------------|---------|
 | 1 | `MEMORY.md` | Curated long-term memory |
 | 2 | `memory/*.md` | Raw session logs |
 | 3 | `memory/sessions/*.qmd` | Structured QMD summaries |
 | 4 | Neo4j | Knowledge graph + vector search |
-| 5 | FAISS | Local semantic embeddings (offline fallback) |
+| 5 | FAISS (optional) | Local semantic embeddings (offline fallback) | Requires manual index build |
 
 See `docs/ARCHITECTURE.md` for detailed design.
 
