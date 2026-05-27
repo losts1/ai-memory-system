@@ -95,6 +95,56 @@ class MemoryStateManager:
                 now=now,
             )
 
+    def _create_memory_query(
+        self, s, session_id: str, query_id: str, query: str, now, result_count: int, max_score: float
+    ) -> None:
+        """Internal helper to create a MemoryQuery node and link it."""
+        s.run(
+            """
+            MATCH (ms:MemoryState {session_id: $session_id})
+            CREATE (q:MemoryQuery {
+                id: $query_id,
+                query_text: $query_text,
+                timestamp: $now,
+                result_count: $result_count,
+                max_score: $max_score
+            })
+            CREATE (ms)-[:HAS_QUERY]->(q)
+            SET ms.query_count = ms.query_count + 1,
+                ms.updated_at = $now
+            """,
+            session_id=session_id,
+            query_id=query_id,
+            query_text=query,
+            now=now,
+            result_count=result_count,
+            max_score=float(max_score),
+        )
+
+    def _link_fact_to_query(
+        self, s, session_id: str, query_id: str, fact_name: str, score: float, state: str, loaded_at
+    ) -> None:
+        """Internal helper to link a fact result to a query."""
+        s.run(
+            """
+            MATCH (ms:MemoryState {session_id: $session_id})
+            MATCH (q:MemoryQuery {id: $query_id})
+            MERGE (mf:MemoryFact {fact_name: $fact_name, session_id: $session_id})
+            ON CREATE SET mf.state = $state,
+                          mf.score = $score,
+                          mf.loaded_at = $loaded_at
+            ON MATCH  SET mf.score = CASE WHEN $score > mf.score THEN $score ELSE mf.score END
+            MERGE (ms)-[:HAS_FACT]->(mf)
+            MERGE (q)-[:RETURNED]->(mf)
+            """,
+            session_id=session_id,
+            query_id=query_id,
+            fact_name=fact_name,
+            state=state,
+            score=score,
+            loaded_at=loaded_at,
+        )
+
     # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
@@ -149,30 +199,8 @@ class MemoryStateManager:
         self._ensure_session(session_id)
 
         with self.driver.session() as s:
-            # Create the MemoryQuery node
-            s.run(
-                """
-                MATCH (ms:MemoryState {session_id: $session_id})
-                CREATE (q:MemoryQuery {
-                    id: $query_id,
-                    query_text: $query_text,
-                    timestamp: $now,
-                    result_count: $result_count,
-                    max_score: $max_score
-                })
-                CREATE (ms)-[:HAS_QUERY]->(q)
-                SET ms.query_count = ms.query_count + 1,
-                    ms.updated_at = $now
-                """,
-                session_id=session_id,
-                query_id=query_id,
-                query_text=query,
-                now=now,
-                result_count=result_count,
-                max_score=float(max_score),
-            )
+            self._create_memory_query(s, session_id, query_id, query, now, result_count, max_score)
 
-            # Create/update MemoryFact nodes for each result
             for r in results:
                 fact_name = r.get("name", "")
                 if not fact_name:
@@ -180,25 +208,7 @@ class MemoryStateManager:
                 score = float(r.get("score", 0.0))
                 loaded_at = now if state == "loaded" else None
 
-                s.run(
-                    """
-                    MATCH (ms:MemoryState {session_id: $session_id})
-                    MATCH (q:MemoryQuery {id: $query_id})
-                    MERGE (mf:MemoryFact {fact_name: $fact_name, session_id: $session_id})
-                    ON CREATE SET mf.state = $state,
-                                  mf.score = $score,
-                                  mf.loaded_at = $loaded_at
-                    ON MATCH  SET mf.score = CASE WHEN $score > mf.score THEN $score ELSE mf.score END
-                    MERGE (ms)-[:HAS_FACT]->(mf)
-                    MERGE (q)-[:RETURNED]->(mf)
-                    """,
-                    session_id=session_id,
-                    query_id=query_id,
-                    fact_name=fact_name,
-                    state=state,
-                    score=score,
-                    loaded_at=loaded_at,
-                )
+                self._link_fact_to_query(s, session_id, query_id, fact_name, score, state, loaded_at)
 
         return {
             "query_id": query_id,
@@ -258,8 +268,32 @@ class MemoryStateManager:
         """Get full state summary for a session."""
         self._ensure_session(session_id)
 
+        state = self._get_session_state(session_id)
+        if not state:
+            return None
+
+        facts = self._get_facts_for_session(session_id)
+        queries = self._get_recent_queries(session_id, limit=10)
+
+        loaded = sum(1 for f in facts if f["state"] == "loaded")
+        pending = sum(1 for f in facts if f["state"] == "pending")
+
+        return {
+            "session_id": state["session_id"],
+            "created_at": state["created_at"],
+            "updated_at": state["updated_at"],
+            "query_count": state["query_count"],
+            "facts_total": len(facts),
+            "facts_loaded": loaded,
+            "facts_pending": pending,
+            "recent_queries": queries,
+            "facts": facts,
+        }
+
+    def _get_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Internal helper: fetch basic MemoryState info."""
         with self.driver.session() as s:
-            state_result = s.run(
+            result = s.run(
                 """
                 MATCH (ms:MemoryState {session_id: $session_id})
                 RETURN ms.session_id AS session_id,
@@ -269,11 +303,20 @@ class MemoryStateManager:
                 """,
                 session_id=session_id,
             )
-            state_rec = state_result.single()
-            if not state_rec:
+            rec = result.single()
+            if not rec:
                 return None
+            return {
+                "session_id": rec["session_id"],
+                "created_at": str(rec["created_at"]),
+                "updated_at": str(rec["updated_at"]),
+                "query_count": rec["query_count"],
+            }
 
-            facts_result = s.run(
+    def _get_facts_for_session(self, session_id: str) -> List[Dict[str, Any]]:
+        """Internal helper: fetch all facts for a session with their state/score."""
+        with self.driver.session() as s:
+            result = s.run(
                 """
                 MATCH (ms:MemoryState {session_id: $session_id})-[:HAS_FACT]->(mf:MemoryFact)
                 RETURN mf.fact_name AS fact_name,
@@ -284,17 +327,20 @@ class MemoryStateManager:
                 """,
                 session_id=session_id,
             )
-            facts = [
+            return [
                 {
                     "fact_name": r["fact_name"],
                     "state": r["state"],
                     "score": r["score"],
                     "loaded_at": str(r["loaded_at"]) if r["loaded_at"] else None,
                 }
-                for r in facts_result
+                for r in result
             ]
 
-            queries_result = s.run(
+    def _get_recent_queries(self, session_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Internal helper: fetch recent queries for a session."""
+        with self.driver.session() as s:
+            result = s.run(
                 """
                 MATCH (ms:MemoryState {session_id: $session_id})-[:HAS_QUERY]->(q:MemoryQuery)
                 RETURN q.id AS id,
@@ -303,11 +349,12 @@ class MemoryStateManager:
                        q.result_count AS result_count,
                        q.max_score AS max_score
                 ORDER BY q.timestamp DESC
-                LIMIT 10
+                LIMIT $limit
                 """,
                 session_id=session_id,
+                limit=limit,
             )
-            queries = [
+            return [
                 {
                     "id": r["id"],
                     "query_text": r["query_text"],
@@ -315,23 +362,8 @@ class MemoryStateManager:
                     "result_count": r["result_count"],
                     "max_score": r["max_score"],
                 }
-                for r in queries_result
+                for r in result
             ]
-
-            loaded = sum(1 for f in facts if f["state"] == "loaded")
-            pending = sum(1 for f in facts if f["state"] == "pending")
-
-            return {
-                "session_id": state_rec["session_id"],
-                "created_at": str(state_rec["created_at"]),
-                "updated_at": str(state_rec["updated_at"]),
-                "query_count": state_rec["query_count"],
-                "facts_total": len(facts),
-                "facts_loaded": loaded,
-                "facts_pending": pending,
-                "recent_queries": queries,
-                "facts": facts,
-            }
 
     # ------------------------------------------------------------------
     # Fact loading
