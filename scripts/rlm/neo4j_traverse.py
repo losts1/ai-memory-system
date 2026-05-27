@@ -238,13 +238,17 @@ def trace_parameter(
     parameter: str,
     depth: int,
     max_nodes: int,
-    metadata_only: bool
+    metadata_only: bool,
+    fields: List[str] = None
 ) -> Dict[str, Any]:
     """
-    Trace a parameter through the graph: follow RELATED_TO edges, filter nodes
-    whose key_points or HAS_WORD words contain the parameter string.
+    Trace a parameter through the graph (RLM-style).
+
+    Follows RELATED_TO / SHARES_PARAMETER edges and filters nodes
+    whose key_points or Words contain the parameter.
     """
     depth = min(depth, MAX_DEPTH_CAP)
+    fields = fields or ['name', 'teaser', 'kp_count', 'related_count', 'top_words']
 
     cypher = """
         MATCH (start:Fact {name: $start_name})-[:RELATED_TO|SHARES_PARAMETER*1..%(depth)d]-(f:Fact)
@@ -292,7 +296,7 @@ def trace_parameter(
                 visited.add(node_name)
 
                 rec_dict = dict(record)
-                nodes.append(_format_node(node_name, rec_dict, ['name', 'teaser', 'kp_count', 'related_count', 'top_words'], metadata_only))
+                nodes.append(_format_node(node_name, rec_dict, fields, metadata_only))
 
                 if len(nodes) >= max_nodes:
                     break
@@ -450,13 +454,15 @@ Examples:
                     print(f"Error: {result.get('error')}")
 
         elif args.parameter:
+            field_list = [f.strip() for f in args.fields.split(',')] if args.fields else None
             result = trace_parameter(
                 driver,
                 start=args.start,
                 parameter=args.parameter,
                 depth=args.depth,
                 max_nodes=args.max_nodes,
-                metadata_only=args.metadata_only
+                metadata_only=args.metadata_only,
+                fields=field_list
             )
             if args.json:
                 print(json.dumps(result, indent=2))
@@ -507,16 +513,16 @@ Examples:
 def _print_node(node: Dict[str, Any]) -> None:
     """Pretty-print a single node result."""
     print(f"\n  {node.get('name', '?')}")
-    if 'teaser' in node and node['teaser']:
+    if node.get('teaser'):
         print(f"    {node['teaser']}")
-    if 'kp_count' in node:
-        print(f"    key_points: {node['kp_count']}, related: {node.get('related_count', 0)}")
-    if 'top_words' in node and node['top_words']:
+    if 'kp_count' in node or 'related_count' in node:
+        print(f"    key_points: {node.get('kp_count', 0)}, related: {node.get('related_count', 0)}")
+    if node.get('top_words'):
         print(f"    words: {', '.join(node['top_words'])}")
-    if 'key_points' in node and node['key_points']:
+    if node.get('key_points'):
         for kp in node['key_points'][:3]:
             print(f"    - {kp[:100]}")
-    if 'summary' in node and node['summary']:
+    if node.get('summary'):
         print(f"    summary: {node['summary'][:200]}")
 
 

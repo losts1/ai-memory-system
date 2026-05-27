@@ -5,6 +5,17 @@ Memory State Manager - Per-session memory state tracking in Neo4j.
 Manages transient MemoryState, MemoryQuery, and MemoryFact nodes to track
 which facts have been loaded into LLM context during a session.
 
+================================================================================
+PHASE 4 — ADVANCED RLM TOOLING (EXPERIMENTAL)
+
+This is a core piece of the lazy Recursive Language Model architecture.
+Instead of loading hundreds of facts on every turn, the agent can lazily
+load only what is relevant and track what has already been "seen" in the
+current session.
+
+See UPGRADE_PLAN.md for Phase 4 context.
+================================================================================
+
 Usage:
     python3 memory_state.py --init --session "agent:main:main"
     python3 memory_state.py --record-query --session "agent:main:main" --query "gamma" --results Fact1,Fact2 --scores 0.95,0.89
@@ -26,18 +37,19 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-NEO4J_VENV = Path.home() / ".openclaw/workspace/neo4j-venv"
-if NEO4J_VENV.exists():
-    sys.path.insert(0, str(NEO4J_VENV / "lib/python3.12/site-packages"))
+from dotenv import load_dotenv
+
+# Workspace directory: set AI_MEMORY_DIR env var to override default (~/.ai-memory)
+_WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
+load_dotenv(_WORKSPACE / ".env.neo4j")
 
 try:
     from neo4j import GraphDatabase
-    from dotenv import load_dotenv
 except ImportError as e:
     print(json.dumps({"success": False, "error": f"Neo4j driver not available: {e}"}))
     sys.exit(1)
 
-WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE", "/home/lost/.openclaw/workspace"))
+WORKSPACE = Path(os.environ.get("OPENCLAW_WORKSPACE", str(_WORKSPACE)))
 ENV_FILE = WORKSPACE / ".env.neo4j"
 
 
