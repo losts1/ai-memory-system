@@ -10,6 +10,7 @@ These are some of the most powerful and distinctive parts of the original privat
 |-------------------------|----------------------------------------------|----------|-------|
 | `neo4j_traverse.py`     | Rich graph traversal + parameter tracing     | Highest  | Core RLM technique |
 | `memory_state.py`       | Per-session lazy loading state tracking      | High     | Enables true lazy RLM |
+| `neo4j_learn_sync.py`   | Ingest learner/daily notes → high-signal Facts + Word index + embeddings | High | Feeds the graph for the other tools; now assistant-aware |
 
 ## Key Concepts
 
@@ -34,4 +35,4 @@ If you are a submind or external user experimenting with these, your experience 
 
 ---
 
-**Status**: Early Phase 4 seeding. Expect further refinement.
+**Status**: Phase 4 — learn_sync, traverse, and memory_state have received deep cleaning (helper extraction, bug fixes, robustness, Phase 2 assistant symmetry). Further examples and shared helpers planned.

@@ -15,6 +15,8 @@ Usage examples:
     python3 neo4j_learn_sync.py --days 7 --full
     python3 neo4j_learn_sync.py --extract-params
     python3 neo4j_learn_sync.py --rebuild-graph
+    python3 neo4j_learn_sync.py --assistant Weft
+    python3 neo4j_learn_sync.py --assistant Weft --mind   # --mind is alias for --assistant
 
 ================================================================================
 PHASE 4 — ADVANCED RLM TOOLING (EXPERIMENTAL)
@@ -161,42 +163,67 @@ def _save_sync_state(state: dict, memory_files: list[Path]) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
+def _prepare_embedding_text(key_points: list[str]) -> str | None:
+    """Build a compact text blob from the first few key points for embedding."""
+    if not key_points:
+        return None
+    parts = [kp for kp in key_points[:5] if kp and kp.strip()]
+    text = ' '.join(parts)
+    return text.strip() or None
+
+
+def _build_fact_metadata(topic: dict) -> dict:
+    """Construct the metadata dict used for both FAISS and Neo4j vector paths."""
+    name = topic.get('name', '')
+    return {
+        'name': name,
+        'source_file': topic.get('source_file', ''),
+        'key_points': topic.get('key_points', [])[:5],
+        'summary': (topic.get('summary') or '')[:200],
+    }
+
+
 def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir: Path):
-    """Fetch embedding with disk caching. Returns (success, embedding or None)."""
+    """Fetch embedding with disk caching + basic retry. Returns embedding list or None."""
     import hashlib
     import pickle
+    import time
 
     text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
     cache_file = cache_dir / f'{model}_{text_hash}.pkl'
 
-    # Check cache
     if cache_file.exists():
         try:
             with open(cache_file, 'rb') as f:
                 return pickle.load(f)
         except Exception:
-            pass
+            pass  # corrupt cache — re-fetch
 
-    # Get from Ollama
-    try:
-        response = requests.post(
-            f'{ollama_url}/api/embeddings',
-            json={'model': model, 'prompt': text[:2000]},
-            timeout=30
-        )
-        response.raise_for_status()
-        embedding = response.json().get('embedding')
+    last_exc = None
+    for attempt in range(2):  # minimal retry for transient Ollama / network hiccups
+        try:
+            response = requests.post(
+                f'{ollama_url}/api/embeddings',
+                json={'model': model, 'prompt': text[:2000]},
+                timeout=30
+            )
+            response.raise_for_status()
+            embedding = response.json().get('embedding')
 
-        if embedding:
-            try:
-                with open(cache_file, 'wb') as f:
-                    pickle.dump(embedding, f)
-            except Exception:
-                pass  # Cache write failure is non-fatal
+            if embedding:
+                try:
+                    with open(cache_file, 'wb') as f:
+                        pickle.dump(embedding, f)
+                except Exception:
+                    pass
+            return embedding
+        except Exception as e:
+            last_exc = e
+            if attempt == 0:
+                time.sleep(0.5)  # tiny backoff before retry
 
-        return embedding
-    except Exception:
-        return None
+    # All attempts failed — non-fatal for the overall sync
+    return None
 
 MEMORY_DIR = _WORKSPACE / 'memory'
 STATE_FILE = MEMORY_DIR / 'neo4j_learn_sync_state.json'
@@ -368,39 +395,56 @@ def parse_learned_topics(content: str, filepath: Path) -> list[dict]:
     return topics
 
 
-def sync_fact(tx, topic: dict) -> bool:
-    """Create or update a Fact node in Neo4j with Word index."""
+def sync_fact(tx, topic: dict, assistant: str | None = None) -> bool:
+    """Create or update a Fact node in Neo4j with Word index.
+
+    If assistant is provided (Phase 2 multi-tenancy), ensures the Assistant node
+    exists and tags the Fact with assistant=<name>.
+    """
     try:
         words = extract_words(topic['name'])
-        
-        # Create/update Fact node and delete old HAS_WORD edges
-        # created_at only set on first creation (coalesce preserves existing)
-        result = tx.run("""
-            MERGE (f:Fact {name: $name})
+
+        params = {
+            'name': topic['name'],
+            'summary': topic['summary'],
+            'key_points': topic['key_points'],
+            'source_file': topic['source_file'],
+            'created_at': topic['created_at'],
+        }
+        set_clause = """
             SET f.summary = $summary,
                 f.key_points = $key_points,
                 f.source_file = $source_file,
                 f.created_at = coalesce(f.created_at, $created_at),
                 f.updated_at = $created_at
+        """
+        if assistant:
+            set_clause += ", f.assistant = $assistant"
+            params['assistant'] = assistant
+
+        result = tx.run(f"""
+            MERGE (f:Fact {{name: $name}})
+            {set_clause}
             WITH f
             OPTIONAL MATCH (f)-[old:HAS_WORD]->(:Word)
             DELETE old
             WITH f
-            MERGE (s:Source {name: $source_file})
+            MERGE (s:Source {{name: $source_file}})
             MERGE (f)-[:FROM_SOURCE]->(s)
             RETURN f.name as name
-        """, 
-            name=topic['name'],
-            summary=topic['summary'],
-            key_points=topic['key_points'],
-            source_file=topic['source_file'],
-            created_at=topic['created_at']
-        )
-        
+        """, **params)
+
         if not result.single():
             return False
-        
-        # Create Word nodes and HAS_WORD edges
+
+        # Assistant node (additive, idempotent)
+        if assistant:
+            tx.run("""
+                MERGE (a:Assistant {id: $assistant})
+                ON CREATE SET a.name = $assistant, a.type = 'submind', a.created_at = datetime()
+            """, assistant=assistant)
+
+        # Word index edges (unchanged)
         if words:
             tx.run("""
                 MATCH (f:Fact {name: $name})
@@ -408,7 +452,7 @@ def sync_fact(tx, topic: dict) -> bool:
                 MERGE (w:Word {text: word})
                 MERGE (f)-[:HAS_WORD]->(w)
             """, name=topic['name'], words=words)
-        
+
         return True
     except Exception as e:
         print(f"Error syncing topic '{topic.get('name', 'unknown')}': {e}")
@@ -511,6 +555,8 @@ def main():
                         help='Run parameter extraction (SHARES_PARAMETER / PREREQUISITE_OF) after syncing')
     parser.add_argument('--rebuild-graph', action='store_true',
                         help='Delete all RELATED_TO edges and rebuild from current Word index (no new sync needed)')
+    parser.add_argument('--assistant', '--mind', dest='assistant',
+                        help='Tag created Fact nodes with this assistant/mind name (Phase 2 multi-tenancy)')
     args = parser.parse_args()
 
     # --rebuild-graph: just clean + rebuild RELATED_TO, no file sync
@@ -519,14 +565,12 @@ def main():
         try:
             with driver.session() as session:
                 print("Rebuilding RELATED_TO graph with tighter params (max_df_ratio=0.1, min_shared=2)...")
-                # Delete polluted Word nodes (high-frequency stopwords that slipped in)
                 session.run("""
                     MATCH (w:Word)
                     WHERE w.text IN $stop_words
                     DETACH DELETE w
                 """, stop_words=list(STOP_WORDS))
                 print("  Removed stopword Word nodes")
-                # Rebuild
                 session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
                 session.execute_write(cleanup_orphaned_words)
                 result = session.run("MATCH ()-[r:RELATED_TO]->() RETURN count(r) AS cnt")
@@ -535,6 +579,9 @@ def main():
         finally:
             driver.close()
         return
+
+    if args.assistant:
+        print(f"Tagging new Facts with assistant: {args.assistant}")
 
     state = _load_sync_state(args.full)
     
@@ -578,7 +625,7 @@ def main():
             synced = 0
             with driver.session() as session:
                 for topic in all_topics:
-                    if session.execute_write(sync_fact, topic):
+                    if session.execute_write(sync_fact, topic, args.assistant):
                         synced += 1
                         print(f"  ✓ {topic['name']}")
 
@@ -600,42 +647,22 @@ def update_embedding_index(topics: list) -> int:
     """Update FAISS embedding index with new Facts. Returns number added."""
     if not EMBEDDING_INDEX_AVAILABLE:
         return 0
-    
+
     try:
         embedding_index = EmbeddingIndex()
-        
-        # Add new topics to index
         added = 0
         for topic in topics:
-            name = topic.get('name', '')
-            key_points = topic.get('key_points', [])
-            source_file = topic.get('source_file', '')
-            summary = topic.get('summary', '')
-            
-            if not key_points:
+            text = _prepare_embedding_text(topic.get('key_points', []))
+            if not text:
                 continue
-            
-            # Use key_points for embedding
-            text_parts = [kp for kp in key_points[:5] if kp]
-            if not text_parts:
-                continue
-            
-            text = ' '.join(text_parts)
-            doc_id = f"fact:{name}"
-            metadata = {
-                'name': name,
-                'source_file': source_file,
-                'key_points': key_points[:5],
-                'summary': summary[:200] if summary else ''
-            }
-            
+            doc_id = f"fact:{topic.get('name', '')}"
+            metadata = _build_fact_metadata(topic)
             if embedding_index.add_document(doc_id, text, metadata):
                 added += 1
-        
+
         if added > 0:
             embedding_index._save_index()
             print(f"  Added {added} facts to FAISS embedding index")
-        
         return added
     except Exception as e:
         print(f"Warning: Could not update embedding index: {e}", file=sys.stderr)
@@ -646,54 +673,48 @@ def update_neo4j_vector(topics: list, driver) -> int:
     """Update Neo4j Fact.embedding for vector search. Returns number updated."""
     if not NEO4J_VECTOR_AVAILABLE:
         return 0
-    
+
     try:
         cache_dir = _WORKSPACE / 'memory' / 'embeddings'
         model = os.environ.get('EMBEDDING_MODEL', 'nomic-embed-text')
         ollama_url = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-        
-        updated = 0
-        
-        # Batch get embeddings
-        texts = []
-        names = []
+
+        # Collect texts + names using shared prep helper
+        texts, names = [], []
         for topic in topics:
-            key_points = topic.get('key_points', [])
-            if not key_points:
-                continue
-            text = ' '.join([kp for kp in key_points[:5] if kp])
-            if text.strip():
+            text = _prepare_embedding_text(topic.get('key_points', []))
+            if text:
                 texts.append(text)
                 names.append(topic.get('name', ''))
-        
+
         if not texts:
             return 0
-        
+
         embeddings = [None] * len(texts)
-        
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(_get_embedding_with_cache, text, model, ollama_url, cache_dir): i 
+            futures = {executor.submit(_get_embedding_with_cache, text, model, ollama_url, cache_dir): i
                        for i, text in enumerate(texts)}
             for future in as_completed(futures):
-                i, embedding = future.result()
-                embeddings[i] = embedding
-        
-        # Update Neo4j
+                i = futures[future]
+                embeddings[i] = future.result()
+
+        # Apply to graph (best-effort per fact)
+        updated = 0
         with driver.session() as session:
             for name, embedding in zip(names, embeddings):
-                if embedding:
-                    try:
-                        session.run('''
-                            MATCH (f:Fact {name: $name})
-                            SET f.embedding = $embedding
-                        ''', name=name, embedding=embedding)
-                        updated += 1
-                    except Exception as e:
-                        print(f"  Error updating {name}: {e}")
-        
+                if not embedding:
+                    continue
+                try:
+                    session.run('''
+                        MATCH (f:Fact {name: $name})
+                        SET f.embedding = $embedding
+                    ''', name=name, embedding=embedding)
+                    updated += 1
+                except Exception as e:
+                    print(f"  Error updating embedding for {name}: {e}")
+
         if updated > 0:
             print(f"  Updated {updated} facts in Neo4j vector index")
-        
         return updated
     except Exception as e:
         print(f"Warning: Could not update Neo4j vector index: {e}", file=sys.stderr)

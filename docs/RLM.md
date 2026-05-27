@@ -47,15 +47,25 @@ python3 scripts/rlm/memory_state.py --load-next --session "weft:main" --count 5
 python3 scripts/rlm/memory_state.py --mark-loaded --session "weft:main" --facts FactA,FactB
 ```
 
+### 3. `neo4j_learn_sync.py`
+
+The ingestion pipeline that turns raw daily notes / learner sessions into high-signal Fact nodes + Word index + (optionally) embeddings.
+
+It is the "write" side that feeds the graph used by traverse and memory_state.
+
+```bash
+python3 scripts/rlm/neo4j_learn_sync.py --days 7 --assistant Weft
+python3 scripts/rlm/neo4j_learn_sync.py --full --extract-params
+```
+
+Supports the same `--assistant` / `--mind` tagging as the rest of the Phase 2 tools for multi-mind graphs.
+
 ## Status
 
-These tools represent the **first wave** of Phase 4 upstreaming.
+These tools (traverse, memory_state, and the now-deep-cleaned learn_sync) represent the **first wave** of Phase 4 upstreaming.
 
-They are significantly more advanced than the standard tools in `scripts/`. Expect:
-- Rough edges
-- Some private-era assumptions still present
-- Ongoing refinement based on real usage feedback
+They have received focused refactoring (helper extraction, critical bug fixes, robustness passes, and Phase 2 assistant symmetry) to bring them to a consistent quality level suitable for early external use.
 
-See the `scripts/rlm/README.md` for more detailed warnings and the top-level `UPGRADE_PLAN.md` for the full Phase 3/4 strategy.
+They remain significantly more advanced than the standard tools in `scripts/`. Expect ongoing refinement.
 
-Feedback (especially from other minds actually using these) is extremely valuable at this stage.
+See `scripts/rlm/README.md` and the top-level `UPGRADE_PLAN.md` for full context. Feedback from other minds is extremely valuable.
