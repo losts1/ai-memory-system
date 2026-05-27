@@ -16,6 +16,8 @@ Usage:
     python3 hybrid_memory_search.py "HJB" --graph --mind Nova
     python3 hybrid_memory_search.py "your query" --use-embeddings
     python3 hybrid_memory_search.py "your query" --files-only
+    python3 hybrid_memory_search.py "market making" --metadata-only          # Phase 4 lazy
+    python3 hybrid_memory_search.py "kill switch" --fields name,teaser     # Phase 4
 """
 
 import argparse
@@ -25,6 +27,33 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 import subprocess
+
+# Phase 4 RLM metadata helpers (lazy loading / field selection)
+def _apply_metadata_only_local(result):
+    """Lightweight version of the Phase 4 helper."""
+    name = result.get('name', result.get('id', ''))
+    summary = result.get('summary', '')
+    content = result.get('content', '')
+    teaser_src = summary or content
+    teaser = teaser_src[:150] if teaser_src else ''
+    if len(teaser_src) > 150:
+        teaser = ' '.join(teaser[:150].split()[:-1]) + '...'
+    score = result.get('rrf_score', result.get('score', 0))
+    return {
+        'id': name,
+        'name': name,
+        'score': score,
+        'teaser': teaser,
+        'kp_count': len(result.get('key_points') or []),
+        'related_count': result.get('relation_count', result.get('related_count', 0)),
+        'top_words': result.get('top_words', []),
+        'source': result.get('source', '')
+    }
+
+def _apply_fields_filter_local(result, fields):
+    if not fields:
+        return result
+    return {f: result.get(f) for f in fields if f in result}
 
 # Workspace directory: set AI_MEMORY_DIR env var to override default (~/.ai-memory)
 _WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
@@ -268,6 +297,10 @@ def main():
                         help="Use local FAISS index instead of Neo4j vector search")
     parser.add_argument("--assistant", "--mind", dest="assistant",
                         help="Filter results to only those created by this assistant/mind (e.g. Weft, Nova). Matches the Phase 2 assistant property on Fact/Session nodes.")
+    parser.add_argument("--metadata-only", action="store_true",
+                        help="Return only lightweight metadata (name, teaser, kp_count, etc.). Phase 4 RLM lazy loading pattern.")
+    parser.add_argument("--fields", default=None,
+                        help="Comma-separated list of fields to return (e.g. name,summary). Advanced Phase 4 feature.")
 
     args = parser.parse_args()
 
@@ -297,6 +330,21 @@ def main():
     # File search
     print("\nFile Search (grep)")
     file_results = search_files(args.query, args.max_results)
+
+    # Phase 4: Apply metadata-only or fields filter if requested
+    if args.metadata_only:
+        semantic_results = [_apply_metadata_only_local(r) for r in semantic_results]
+        if args.graph:
+            graph_results = [_apply_metadata_only_local(r) for r in graph_results]
+        file_results = [_apply_metadata_only_local(r) for r in file_results]
+
+    if args.fields:
+        requested = [f.strip() for f in args.fields.split(',')]
+        semantic_results = [_apply_fields_filter_local(r, requested) for r in semantic_results]
+        if args.graph:
+            graph_results = [_apply_fields_filter_local(r, requested) for r in graph_results]
+        file_results = [_apply_fields_filter_local(r, requested) for r in file_results]
+
     format_output(file_results, "Files")
 
 
