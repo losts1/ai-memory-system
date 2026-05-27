@@ -160,13 +160,22 @@ High-value pieces to consider upstreaming (in rough priority):
 
 ---
 
-### Phase 5: Reduce Domain Coupling & Improve Templates (Ongoing)
+### Phase 5: Reduce Domain Coupling & Improve Templates (Complete)
 
-**Tasks:**
-- Curate or create a small set of **neutral example learner sessions** and Facts for the redistribution package (instead of leaking heavy quant trading material).
-- Make the `learner-sessions/` and curiosity queue examples domain-agnostic or clearly marked as "trading example".
-- Improve `templates/core/` with more generic, high-quality starting QMDs.
-- Add a `examples/` directory in the repo showing different domains (trading, research, personal knowledge, software engineering, etc.).
+**Done:**
+- Created `examples/` directory with four domain starters:
+  - `research/`
+  - `software-engineering/`
+  - `personal/`
+  - `trading/` (explicitly labeled as "this was the original heavy production domain — not the default")
+- Added `examples/README.md` explaining the Phase 5 intent.
+- Lightly improved `templates/INDEX.qmd` + top-level README "For Your Domain" section to point new users at the examples.
+- `templates/core/` were already mostly generic placeholders; only minimal touch-ups needed.
+- Confirmed that heavy trading `learner-sessions/` data was **never shipped** in the public package (correct scoping).
+
+**Remaining (nice-to-have, not blocking):**
+- More example files over time (community contributions welcome).
+- Optional: one or two fully neutral "starter Facts" in the templates.
 
 ---
 

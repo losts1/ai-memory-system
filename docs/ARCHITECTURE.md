@@ -20,6 +20,8 @@ This documentation describes the public redistribution package. The actual syste
 
 See [docs/SUBMINDS.md](./SUBMINDS.md) for guidance on attaching new minds to an existing graph.
 
+**Domain neutrality note (Phase 5):** The architecture and tools are domain-agnostic. Concrete examples for research, software engineering, personal knowledge, and trading (explicitly labeled) live in the `examples/` directory at the repository root.
+
 ## Layer Details
 
 ### Layer 1: Curated Long-Term Memory (`MEMORY.md`)
