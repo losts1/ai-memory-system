@@ -66,7 +66,12 @@ def _parse_list(raw: str) -> List[str]:
 
 
 class MemoryStateManager:
-    """Manages per-session memory state in Neo4j transient nodes."""
+    """
+    Manages per-session memory state in Neo4j using transient nodes.
+
+    This class is part of the Phase 4 RLM tooling. It enables lazy loading
+    by tracking which facts have been loaded into LLM context during a session.
+    """
 
     def __init__(self):
         self.driver = get_driver()
@@ -80,7 +85,7 @@ class MemoryStateManager:
     # ------------------------------------------------------------------
 
     def _ensure_session(self, session_id: str) -> None:
-        """Ensure a MemoryState node exists for the session (idempotent)."""
+        """Ensure a MemoryState node exists for the session (idempotent create-or-update)."""
         now = _now()
         with self.driver.session() as s:
             s.run(
@@ -98,7 +103,7 @@ class MemoryStateManager:
     def _create_memory_query(
         self, s, session_id: str, query_id: str, query: str, now, result_count: int, max_score: float
     ) -> None:
-        """Internal helper to create a MemoryQuery node and link it."""
+        """Create a MemoryQuery node linked to the MemoryState and increment query count."""
         s.run(
             """
             MATCH (ms:MemoryState {session_id: $session_id})
@@ -124,7 +129,7 @@ class MemoryStateManager:
     def _link_fact_to_query(
         self, s, session_id: str, query_id: str, fact_name: str, score: float, state: str, loaded_at
     ) -> None:
-        """Internal helper to link a fact result to a query."""
+        """Link a returned fact to both the MemoryState and the specific MemoryQuery."""
         s.run(
             """
             MATCH (ms:MemoryState {session_id: $session_id})
