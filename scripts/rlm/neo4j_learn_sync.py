@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
 """
-Sync learned topics from daily memory files to Neo4j as Fact nodes.
+Sync learned topics from daily memory files to Neo4j as Fact nodes (Phase 4 RLM tool).
 
-Parses memory/YYYY-MM-DD.md files, extracts "## Learned:" sections,
-and creates Fact nodes with structured metadata in the knowledge graph.
+Parses memory/YYYY-MM-DD.md (and learner-sessions archives), extracts "## Learned:"
+sections, and creates well-structured Fact nodes + Word index + embeddings.
 
-Uses Word index for efficient O(n × avg_words) relationship linking instead of O(n²).
+Key features:
+- Efficient Word index linking (avoids O(n²) pitfalls)
+- Embedding + vector index updates
+- Parameter / prerequisite relationship extraction (optional)
 
-Also updates:
-- Embedding index (FAISS) for semantic search
-- Neo4j vector index (Fact.embedding) for graph-aware search
+Usage examples:
+    python3 neo4j_learn_sync.py
+    python3 neo4j_learn_sync.py --days 7 --full
+    python3 neo4j_learn_sync.py --extract-params
+    python3 neo4j_learn_sync.py --rebuild-graph
 
 ================================================================================
 PHASE 4 — ADVANCED RLM TOOLING (EXPERIMENTAL)
 
 This is one of the core "learn sync" patterns from the private system.
 
-It turns raw daily notes into high-quality, well-structured Facts + Word index
-+ embeddings. This is a key part of how the RLM maintains signal density over time.
+It is responsible for turning raw notes into the high-signal Facts that power
+the rest of the RLM (traversal, lazy state, etc.).
 
-**Warning:** This is advanced Phase 4 material. It may have private-era
-assumptions and will likely need further adaptation for general use.
+**Warning:** This is advanced Phase 4 material. It may still contain private-era
+assumptions and will need further adaptation for general use.
 
-See UPGRADE_PLAN.md for Phase 4 context.
+See UPGRADE_PLAN.md and scripts/rlm/README.md for context.
 ================================================================================
 """
 
@@ -41,13 +46,13 @@ from neo4j import GraphDatabase
 _WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
 load_dotenv(_WORKSPACE / ".env.neo4j")
 
-URI = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
-USER = os.getenv('NEO4J_USERNAME', 'neo4j')
-PASSWORD = os.getenv('NEO4J_PASSWORD')
+NEO4J_URI = os.getenv('NEO4J_URI', 'bolt://localhost:7687')
+NEO4J_USER = os.getenv('NEO4J_USERNAME', 'neo4j')
+NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD')
 
-if not PASSWORD:
+if not NEO4J_PASSWORD:
     print("ERROR: NEO4J_PASSWORD not set in .env.neo4j")
-    exit(1)
+    sys.exit(1)
 
 # Optional: embedding index for semantic search
 EMBEDDING_INDEX_AVAILABLE = False
@@ -66,7 +71,12 @@ try:
 except ImportError:
     pass
 
-MEMORY_DIR = Path.home() / '.openclaw' / 'workspace' / 'memory'
+
+def get_driver():
+    """Create a Neo4j driver using the standard public package pattern."""
+    return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+
+MEMORY_DIR = _WORKSPACE / 'memory'
 STATE_FILE = MEMORY_DIR / 'neo4j_learn_sync_state.json'
 
 # Short important tokens to preserve (df >= 3 filter skips them otherwise)
@@ -92,10 +102,6 @@ STOP_WORDS = {
 
 # Characters to normalize for word extraction
 NORMALIZE_CHARS = '()&,.:—-'
-
-
-def get_driver():
-    return GraphDatabase.driver(URI, auth=(USER, PASSWORD))
 
 
 def _date_from_filepath(filepath: Path) -> str:
@@ -143,10 +149,6 @@ def extract_words(name: str, min_length: int = 3) -> list[str]:
             result.append(w)
 
     return list(set(result))
-
-
-def get_driver():
-    return GraphDatabase.driver(URI, auth=(USER, PASSWORD))
 
 
 def parse_learned_topics(content: str, filepath: Path) -> list[dict]:
@@ -373,7 +375,11 @@ def is_topic_saturated(topic_name: str, existing_names: set[str], threshold: int
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Sync learned topics from memory files to Neo4j')
+    parser = argparse.ArgumentParser(description='Sync learned topics from memory files to Neo4j (Phase 4 RLM tool)')
+    parser.add_argument('--days', type=int, default=30,
+                        help='How many days back to look for new memory files (default: 30)')
+    parser.add_argument('--full', action='store_true',
+                        help='Ignore sync state and re-process all recent files')
     parser.add_argument('--extract-params', action='store_true',
                         help='Run parameter extraction (SHARES_PARAMETER / PREREQUISITE_OF) after syncing')
     parser.add_argument('--rebuild-graph', action='store_true',
@@ -404,13 +410,13 @@ def main():
         return
 
     # Load state
-    if STATE_FILE.exists():
+    if STATE_FILE.exists() and not args.full:
         state = json.loads(STATE_FILE.read_text())
     else:
         state = {'last_sync': None, 'synced_files': []}
     
-    # Find memory files from last 30 days
-    cutoff = datetime.now() - timedelta(days=30)
+    # Find memory files from the requested window
+    cutoff = datetime.now() - timedelta(days=args.days)
     memory_files = []
 
     # Daily files: YYYY-MM-DD.md
@@ -575,7 +581,7 @@ def update_neo4j_vector(topics: list, driver) -> int:
         import pickle
         from pathlib import Path
         
-        cache_dir = Path.home() / '.openclaw/workspace/memory/embeddings'
+        cache_dir = _WORKSPACE / 'memory' / 'embeddings'
         model = os.environ.get('EMBEDDING_MODEL', 'nomic-embed-text')
         ollama_url = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
         
