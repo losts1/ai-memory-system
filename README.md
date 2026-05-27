@@ -205,6 +205,21 @@ See `docs/ARCHITECTURE.md` for detailed design.
 
 ---
 
+## CLI (Phase 6)
+
+After installing the package (`pip install -e .`), you get a single entry point:
+
+```bash
+ai-memory --help
+ai-memory init
+ai-memory search "attention mechanisms" --assistant Weft
+ai-memory traverse "Attention Is All You Need" --parameter gamma
+ai-memory learn-sync --days 7 --assistant Weft
+ai-memory state --pending --session "weft:main"
+```
+
+This is a thin, consistent wrapper over the individual scripts. All existing flags continue to work.
+
 ## Customization
 
 ### For Your Domain
