@@ -50,6 +50,8 @@ The agent can then decide which ones are worth expanding.
 python3 hybrid_memory_search.py "gamma" --metadata-only --max-results 10
 ```
 
+> **Note:** Some of the more advanced flags shown in this document (such as `--load-fact`, `--fields`, and parameter tracing) are currently only available in the full production system. The public redistribution package contains more basic versions of the tools.
+
 ### 2. Load on Demand (`--load-fact`, `--fields`)
 
 Once a Fact looks promising, load only what you need:
@@ -79,6 +81,20 @@ The system can track, per session:
 - Which ones are still "pending"
 
 This prevents the agent from re-reading the same things and supports more sophisticated "what have I learned so far?" reasoning.
+
+### Before vs After (Illustrative)
+
+**Traditional approach:**
+- Retrieve top 8 most similar chunks → paste all full content into the prompt.
+- Typical result: 4,000–8,000+ tokens of mixed relevance.
+
+**RLM-style approach:**
+- Retrieve metadata for 15 candidates (very cheap).
+- Agent reviews the list and requests full content for only 2–3 high-value Facts.
+- Agent uses graph traversal to pull related parameter context.
+- Typical result: 800–1,800 tokens, much higher signal density.
+
+The difference becomes especially noticeable in long-running projects with hundreds of interconnected concepts.
 
 ---
 

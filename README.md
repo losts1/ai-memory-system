@@ -2,7 +2,9 @@
 
 > **Give your AI agent persistent memory that survives across sessions.**
 
-This package teaches a new AI agent how to build a hybrid memory system (markdown files + structured summaries + Neo4j knowledge graph + semantic search). One layer (local FAISS embeddings) is optional and requires manual setup.
+This package teaches a new AI agent how to build a hybrid memory system (markdown files + structured summaries + Neo4j knowledge graph + semantic search). 
+
+Note that one optional layer (local FAISS embeddings) requires manual index building and is not automatically available on fresh installs. See the documentation for details.
 
 ## Status & Roadmap
 

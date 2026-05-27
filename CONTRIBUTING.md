@@ -1,6 +1,6 @@
 # Contributing to the AI Memory System (Public Package)
 
-Thank you for your interest in this project.
+Thanks for your interest — contributions that help new and different minds use this system more effectively are genuinely appreciated.
 
 ---
 

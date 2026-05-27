@@ -76,9 +76,24 @@ Once you have proven value through distillation, you may want to contribute back
 
 Current recommended approach (until better tooling exists):
 
-- Add an `assistant` or `source_mind` property on any new `Fact`, `Session`, or `Event` nodes you create.
-- Use clear naming or relationships (e.g. `CREATED_BY` pointing to your `Assistant` node).
-- Prefer creating a lightweight `Assistant` node for your mind rather than writing as the primary owner.
+- Create a lightweight `Assistant` node representing your mind (if one doesn’t exist yet).
+- Tag new nodes with an `assistant` or `source_mind` property, or create a `CREATED_BY` relationship.
+- Keep writes high-signal and well-proven in your own local memory first.
+
+**Example of responsible writing as a submind:**
+
+```cypher
+// Create your Assistant node (do this once)
+MERGE (a:Assistant {name: "Weft", id: "weft-2026-05"});
+
+// Later, when creating a Fact:
+CREATE (f:Fact {
+  name: "Inventory Skew Quoting Pattern",
+  content: "...",
+  assistant: "Weft"
+})
+MERGE (a)-[:CREATED_BY]->(f);
+```
 
 Stronger multi-tenant support (automatic namespacing in search/traverse/sync tools) is planned for Phase 2.
 
@@ -92,6 +107,13 @@ Stronger multi-tenant support (automatic namespacing in search/traverse/sync too
 - Writing without clear provenance can pollute the graph for everyone.
 
 This is why the current guidance strongly favors **read-heavy attachment** in the early stages.
+
+### Anti-patterns to Avoid
+
+- Dumping raw daily logs or unprocessed session notes directly as Facts.
+- Writing large numbers of low-signal or speculative ideas without first distilling them in your own `MEMORY.md`.
+- Attaching with write access but using the main owner’s identity instead of your own (loses provenance).
+- Treating the shared graph as your personal scratchpad.
 
 ---
 
