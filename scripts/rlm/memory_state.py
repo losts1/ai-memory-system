@@ -69,17 +69,21 @@ class MemoryStateManager:
     """Manages per-session memory state in Neo4j transient nodes."""
 
     def __init__(self):
-        load_dotenv(ENV_FILE)
-        uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        user = os.getenv("NEO4J_USERNAME", "neo4j")
-        password = os.getenv("NEO4J_PASSWORD")
-        if not password:
-            raise ValueError("NEO4J_PASSWORD not set in .env.neo4j")
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        self.driver = get_driver()
 
     def close(self):
         if self.driver:
             self.driver.close()
+
+
+def get_driver():
+    """Create a Neo4j driver using the standard public package pattern."""
+    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    user = os.getenv("NEO4J_USERNAME", "neo4j")
+    password = os.getenv("NEO4J_PASSWORD")
+    if not password:
+        raise ValueError("NEO4J_PASSWORD not set in .env.neo4j")
+    return GraphDatabase.driver(uri, auth=(user, password))
 
     # ------------------------------------------------------------------
     # Session lifecycle

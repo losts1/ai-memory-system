@@ -65,24 +65,17 @@ MAX_DEPTH_CAP = 3
 DEFAULT_MAX_NODES = 50
 
 
-def load_credentials() -> Dict[str, str]:
-    """Load Neo4j credentials from .env.neo4j."""
-    if not ENV_FILE.exists():
-        raise FileNotFoundError(f"Credentials file not found: {ENV_FILE}")
+def get_driver():
+    """Create and return a Neo4j driver using the standard public package pattern."""
+    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    user = os.getenv("NEO4J_USERNAME", "neo4j")
+    password = os.getenv("NEO4J_PASSWORD")
+    if not password:
+        raise ValueError("NEO4J_PASSWORD not set in .env.neo4j")
 
-    creds = {}
-    with open(ENV_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if '=' in line and not line.startswith('#'):
-                key, value = line.split('=', 1)
-                creds[key.strip().lower()] = value.strip()
-
-    return {
-        'uri': creds.get('neo4j_uri', 'bolt://localhost:7687'),
-        'username': creds.get('neo4j_username', 'neo4j'),
-        'password': creds.get('neo4j_password', '')
-    }
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    driver.verify_connectivity()
+    return driver
 
 
 def _make_teaser(summary: str) -> str:
@@ -417,11 +410,9 @@ Examples:
     if not args.stats and not args.start:
         parser.error('--start is required unless --stats is used')
 
-    # Connect
+    # Connect using public package conventions
     try:
-        creds = load_credentials()
-        driver = GraphDatabase.driver(creds['uri'], auth=(creds['username'], creds['password']))
-        driver.verify_connectivity()
+        driver = get_driver()
     except Exception as e:
         out = {'success': False, 'error': f'Cannot connect to Neo4j: {e}'}
         print(json.dumps(out, indent=2))
