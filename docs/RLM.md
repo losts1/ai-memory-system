@@ -1,6 +1,8 @@
-# Recursive Language Model (RLM) Enhancements
+# Recursive Language Model (RLM) Tools
 
-**Status:** Phase 1 (Draft) — 2026-05-27
+**Status:** Phase 4 (In Progress) — 2026-05-27
+
+This document describes the **Recursive Language Model** patterns and tools being upstreamed into the public package as part of Phase 4 of the upgrade plan.
 
 This document introduces the **Recursive Language Model** approach to memory and retrieval that powers the more advanced parts of this system.
 
@@ -114,19 +116,29 @@ This is especially valuable for:
 
 ---
 
-## Current Status in the Public Package
+## Current Status in the Public Package (Phase 4)
 
-The public redistribution package currently exposes basic versions of hybrid search and some traversal capability.
+As of late May 2026, the following Phase 4 RLM tools have been seeded into the public package under `scripts/rlm/`:
 
-The more advanced RLM tooling (`neo4j_traverse.py` with parameter tracing, `memory_state.py`, sophisticated lazy loading flows, etc.) exists in the full production system and is being gradually upstreamed as part of the [upgrade plan](../UPGRADE_PLAN.md).
+- `neo4j_traverse.py` — Graph traversal with powerful `--parameter` tracing mode
+- `memory_state.py` — Per-session lazy loading state tracking (`pending` vs `loaded` facts)
+- `neo4j_learn_sync.py` — Turns daily/learner notes into high-quality Facts + Word index + embeddings
+- `metadata.py` — Core helpers for `apply_metadata_only()` and field selection (lazy loading foundation)
 
-See [docs/SUBMINDS.md](./SUBMINDS.md) for how new minds can still benefit from an existing rich graph even before all the tooling is fully public.
+The main `hybrid_memory_search.py` has also been enhanced with `--metadata-only` and `--fields` support.
+
+These tools are still **experimental** and carry the "Phase 4 — Advanced RLM Tooling" warning. They are being cleaned and adapted incrementally (following the same pattern as the multi-tenancy work in Phase 2).
+
+See the `scripts/rlm/` directory (especially its README) for usage and caveats.
+
+See [docs/SUBMINDS.md](./SUBMINDS.md) for how new minds can attach to and benefit from an existing graph.
 
 ---
 
 ## Further Reading
 
-- Local production documentation: `docs/neo4j-memory-system.md` and `rlm-neo4j-enhancement-plan.md` (in the full system)
+- `scripts/rlm/README.md` — Current status and warnings for the tools in this package
+- `UPGRADE_PLAN.md` — Full Phase 3/4 roadmap (library extraction + RLM upstreaming)
 - Paper: [arXiv:2512.24601](https://arxiv.org/abs/2512.24601) — Zhang, Kraska, Khattab (MIT, ICML 2026)
 
 ---
