@@ -31,6 +31,10 @@ Usage:
     python3 neo4j_traverse.py --start "Avellaneda-Stoikov" --filter-word gamma
     python3 neo4j_traverse.py --start "Avellaneda-Stoikov" --parameter gamma
     python3 neo4j_traverse.py --stats
+
+The --parameter mode is particularly powerful for RLM-style work:
+it traces how a specific concept/parameter (e.g. "gamma", "inventory", "kill switch")
+appears across related Facts in the graph.
 """
 
 import argparse
@@ -392,7 +396,11 @@ Examples:
                         help='Comma-separated fields per node (default: name). '
                              'Options: name,key_points,summary,teaser,kp_count,related_count,top_words')
     parser.add_argument('--filter-word', help='Only include nodes whose words/key_points contain this term')
-    parser.add_argument('--parameter', help='Trace a parameter: follow RELATED_TO, filter by word match')
+    parser.add_argument('--parameter', 
+                        help='RLM-style parameter tracing: start from --start and follow '
+                             'RELATED_TO edges, returning only nodes whose key_points or '
+                             'associated Words contain the given parameter string. '
+                             'Very useful for exploring how a concept appears across the graph.')
     parser.add_argument('--stats', action='store_true', help='Print graph statistics')
     parser.add_argument('--max-nodes', type=int, default=DEFAULT_MAX_NODES,
                         help=f'Max total nodes to return (default: {DEFAULT_MAX_NODES})')
@@ -454,11 +462,17 @@ Examples:
                 print(json.dumps(result, indent=2))
             else:
                 if result.get('success'):
-                    print(f"Parameter trace: '{args.parameter}' from '{args.start}' (depth {result['depth']})")
-                    print(f"Found {result['total_nodes']} matching nodes")
+                    print(f"\nRLM Parameter Trace")
+                    print(f"Parameter : '{args.parameter}'")
+                    print(f"Starting  : '{args.start}'")
+                    print(f"Depth     : {result['depth']}")
+                    print(f"Matches   : {result['total_nodes']} nodes")
                     print("=" * 60)
-                    for node in result['nodes']:
-                        _print_node(node)
+                    if result['total_nodes'] == 0:
+                        print("No nodes matched this parameter within the depth limit.")
+                    else:
+                        for node in result['nodes']:
+                            _print_node(node)
                 else:
                     print(f"Error: {result.get('error')}")
 
