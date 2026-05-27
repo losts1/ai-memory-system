@@ -75,15 +75,25 @@ class MemoryStateManager:
         if self.driver:
             self.driver.close()
 
+    # ------------------------------------------------------------------
+    # Internal helpers (deep clean)
+    # ------------------------------------------------------------------
 
-def get_driver():
-    """Create a Neo4j driver using the standard public package pattern."""
-    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    user = os.getenv("NEO4J_USERNAME", "neo4j")
-    password = os.getenv("NEO4J_PASSWORD")
-    if not password:
-        raise ValueError("NEO4J_PASSWORD not set in .env.neo4j")
-    return GraphDatabase.driver(uri, auth=(user, password))
+    def _ensure_session(self, session_id: str) -> None:
+        """Ensure a MemoryState node exists for the session (idempotent)."""
+        now = _now()
+        with self.driver.session() as s:
+            s.run(
+                """
+                MERGE (ms:MemoryState {session_id: $session_id})
+                ON CREATE SET ms.created_at = $now,
+                              ms.updated_at = $now,
+                              ms.query_count = 0
+                ON MATCH  SET ms.updated_at = $now
+                """,
+                session_id=session_id,
+                now=now,
+            )
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -92,20 +102,17 @@ def get_driver():
     def init_session(self, session_id: str) -> Dict[str, Any]:
         """Create or refresh a MemoryState node for a session (idempotent)."""
         now = _now()
+        self._ensure_session(session_id)
+
         with self.driver.session() as s:
             result = s.run(
                 """
-                MERGE (ms:MemoryState {session_id: $session_id})
-                ON CREATE SET ms.created_at = $now,
-                              ms.updated_at = $now,
-                              ms.query_count = 0
-                ON MATCH  SET ms.updated_at = $now
+                MATCH (ms:MemoryState {session_id: $session_id})
                 RETURN ms.session_id AS session_id,
                        ms.created_at AS created_at,
                        ms.query_count AS query_count
                 """,
                 session_id=session_id,
-                now=now,
             )
             rec = result.single()
             return {
@@ -139,19 +146,9 @@ def get_driver():
         result_count = len(results)
         max_score = max((r.get("score", 0.0) for r in results), default=0.0)
 
-        with self.driver.session() as s:
-            # Ensure session exists
-            s.run(
-                """
-                MERGE (ms:MemoryState {session_id: $session_id})
-                ON CREATE SET ms.created_at = $now,
-                              ms.updated_at = $now,
-                              ms.query_count = 0
-                """,
-                session_id=session_id,
-                now=now,
-            )
+        self._ensure_session(session_id)
 
+        with self.driver.session() as s:
             # Create the MemoryQuery node
             s.run(
                 """
@@ -218,6 +215,8 @@ def get_driver():
     def mark_loaded(self, session_id: str, fact_names: List[str]) -> int:
         """Mark facts as loaded (context was provided to LLM). Returns count updated."""
         now = _now()
+        self._ensure_session(session_id)
+
         with self.driver.session() as s:
             result = s.run(
                 """
@@ -241,6 +240,8 @@ def get_driver():
 
     def get_pending(self, session_id: str) -> List[Dict[str, Any]]:
         """Get facts in 'pending' state (known but not yet loaded into context)."""
+        self._ensure_session(session_id)
+
         with self.driver.session() as s:
             result = s.run(
                 """
@@ -255,6 +256,8 @@ def get_driver():
 
     def get_summary(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get full state summary for a session."""
+        self._ensure_session(session_id)
+
         with self.driver.session() as s:
             state_result = s.run(
                 """
