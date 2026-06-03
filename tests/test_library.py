@@ -7,11 +7,12 @@ def test_config_importable():
     assert callable(get_driver)
 
 
-def test_get_workspace_default():
+def test_get_workspace_default(monkeypatch):
+    monkeypatch.delenv("AI_MEMORY_DIR", raising=False)
     from ai_memory._config import get_workspace
     ws = get_workspace()
     assert isinstance(ws, Path)
-    assert ws == Path.home() / ".ai-memory" or ws.name == ".ai-memory"
+    assert ws == Path.home() / ".ai-memory"
 
 
 def test_get_workspace_explicit(tmp_path):

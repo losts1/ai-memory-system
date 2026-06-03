@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from neo4j import GraphDatabase
 
 
 def get_workspace(workspace=None) -> Path:
@@ -21,8 +22,6 @@ def get_driver(workspace=None):
     """
     ws = get_workspace(workspace)
     load_dotenv(ws / ".env.neo4j")
-
-    from neo4j import GraphDatabase  # lazy import — neo4j is optional until used
 
     uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
     user = os.getenv("NEO4J_USERNAME", "neo4j")
