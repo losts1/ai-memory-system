@@ -120,13 +120,16 @@ Once the above are settled:
 **Status:** **Decided**
 
 **Decision:** The RLM experimental tools (`neo4j_traverse.py`, `memory_state.py`,
-`neo4j_learn_sync.py`, `metadata.py`) stay in this repository under `scripts/rlm/`
-and `ai_memory/` — they are not split into a separate `ai-memory-rlm` repo.
+`neo4j_learn_sync.py`, `metadata.py`) stay in this repository (`neo4j_traverse.py`, `memory_state.py`, `neo4j_learn_sync.py`
+under `scripts/rlm/`; `metadata.py` under `ai_memory/`) — they are not split into a
+separate `ai-memory-rlm` repo.
 
 **Rationale:**
-- The tools are already public and documented here (Phase 4 tag)
+- The tools are already public and documented here (shipped in Phase 3/v0.3.0)
 - A separate repo adds maintenance overhead without meaningful privacy benefit
 - The library extraction (Phase 3) gives clean boundaries without a repo split
 - If the private production system needs deeper tooling, it can depend on this package
+
+*Note: This decision supersedes the "advanced/private memory repo" note in D-001's Future Todo section — that note applied to trading domain content, not to the generic RLM tooling already public here.*
 
 **Recorded by:** Phase 7 implementation, 2026-06-03.
