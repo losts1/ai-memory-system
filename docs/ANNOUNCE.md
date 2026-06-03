@@ -56,9 +56,11 @@ running scripts via subprocess or copying the script files into your project.
 
 Now you can import directly:
 
-```python
+```bash
 pip install -e .   # or: clone repo and add to PYTHONPATH
+```
 
+```python
 from ai_memory import MemoryClient
 
 with MemoryClient() as client:
@@ -84,7 +86,7 @@ A single `ai-memory` entry point covers all operations:
 
 ```bash
 ai-memory search "attention mechanisms" --assistant Weft
-ai-memory traverse "Attention Is All You Need" --parameter gamma
+ai-memory traverse --start "Attention Is All You Need" --parameter gamma
 ai-memory sync --assistant Weft
 ai-memory learn-sync --days 7
 ai-memory state --pending --session "weft:main"
