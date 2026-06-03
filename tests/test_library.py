@@ -78,3 +78,26 @@ def test_make_teaser_truncates():
 def test_make_teaser_short_unchanged():
     from ai_memory.metadata import make_teaser
     assert make_teaser("short") == "short"
+
+
+def test_search_importable():
+    from ai_memory.search import search_vector, search_graph, search_files, search_faiss
+    assert callable(search_vector)
+    assert callable(search_graph)
+    assert callable(search_files)
+    assert callable(search_faiss)
+
+
+def test_search_files_missing_workspace(tmp_path):
+    """search_files on a workspace with no memory dir returns []."""
+    from ai_memory.search import search_files
+    result = search_files("anything", workspace=tmp_path)
+    assert isinstance(result, list)
+    assert result == []
+
+
+def test_search_faiss_missing_index(tmp_path):
+    """search_faiss returns [] when FAISS index doesn't exist."""
+    from ai_memory.search import search_faiss
+    result = search_faiss("anything", workspace=tmp_path)
+    assert result == []
