@@ -12,7 +12,7 @@ Usage:
     ai-memory --help
     ai-memory init
     ai-memory search "transformer attention" --assistant Weft
-    ai-memory traverse "Attention Is All You Need" --parameter gamma
+    ai-memory traverse --start "Attention Is All You Need" --parameter gamma
     ai-memory sync --assistant Weft
     ai-memory learn-sync --days 7 --assistant Weft
     ai-memory state --pending --session "weft:main"

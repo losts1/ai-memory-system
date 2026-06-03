@@ -237,11 +237,11 @@ ai-memory-system/
 ## Architecture
 
 | Layer | Technology | Purpose | Notes |
-|-------|------------|---------|
-| 1 | `MEMORY.md` | Curated long-term memory |
-| 2 | `memory/*.md` | Raw session logs |
-| 3 | `memory/sessions/*.qmd` | Structured QMD summaries |
-| 4 | Neo4j | Knowledge graph + vector search |
+|-------|------------|---------|-------|
+| 1 | `MEMORY.md` | Curated long-term memory | |
+| 2 | `memory/*.md` | Raw session logs | |
+| 3 | `memory/sessions/*.qmd` | Structured QMD summaries | |
+| 4 | Neo4j | Knowledge graph + vector search | |
 | 5 | FAISS (optional) | Local semantic embeddings (offline fallback) | Requires manual index build |
 
 See `docs/ARCHITECTURE.md` for detailed design.
@@ -295,7 +295,7 @@ After installing the package (`pip install -e .`), you get a single entry point:
 ai-memory --help
 ai-memory init
 ai-memory search "attention mechanisms" --assistant Weft
-ai-memory traverse "Attention Is All You Need" --parameter gamma
+ai-memory traverse --start "Attention Is All You Need" --parameter gamma
 ai-memory learn-sync --days 7 --assistant Weft
 ai-memory state --pending --session "weft:main"
 ```
