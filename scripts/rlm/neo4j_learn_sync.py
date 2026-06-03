@@ -19,11 +19,13 @@ Usage examples:
 import argparse
 import json
 import os
+import hashlib
 import pickle
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Ensure ai_memory package is importable when run as a script
@@ -115,8 +117,6 @@ def _build_fact_metadata(topic: dict) -> dict:
 
 
 def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir: Path):
-    import hashlib
-    import time
     text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
     cache_file = cache_dir / f'{model}_{text_hash}.pkl'
     if cache_file.exists():
@@ -147,12 +147,6 @@ def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir:
             if attempt == 0:
                 time.sleep(0.5)
     return None
-
-
-def _post_process_graph(session, driver) -> None:
-    """Run post-sync graph maintenance via session (kept here for embedding pipeline)."""
-    # Word frequencies + RELATED_TO rebuild handled inside sync_facts()
-    pass
 
 
 def _update_indexes_and_optional_extraction(topics: list, driver, extract_params: bool) -> None:
@@ -239,9 +233,7 @@ def main():
 
     print(f"Found {len(all_topics)} new topics to sync")
     synced = sync_facts(all_topics, assistant=args.assistant)
-    for topic in all_topics[:synced]:
-        print(f"  ✓ {topic['name']}")
-    print(f"\nSynced {synced} topics to Neo4j")
+    print(f"\nSynced {synced}/{len(all_topics)} topics to Neo4j")
 
     # Optional embedding index updates (CLI-only, complex deps)
     if EMBEDDING_INDEX_AVAILABLE or NEO4J_VECTOR_AVAILABLE or args.extract_params:
