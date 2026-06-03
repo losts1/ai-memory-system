@@ -111,3 +111,22 @@ Once the above are settled:
 - **Private advanced memory repo**: Create a separate private repository for the full production system (heavy RLM code, trading-specific learners, memory-v2, internal Nova tooling, etc.). The public `ai-memory-system` repo will remain the clean redistribution/bootstrap experience only.
 
 *Log maintained by Weft during Phase 0 sessions.*
+
+---
+
+## D-005: Long-Term Home for Advanced RLM Code
+
+**Date:** 2026-06-03
+**Status:** **Decided**
+
+**Decision:** The RLM experimental tools (`neo4j_traverse.py`, `memory_state.py`,
+`neo4j_learn_sync.py`, `metadata.py`) stay in this repository under `scripts/rlm/`
+and `ai_memory/` — they are not split into a separate `ai-memory-rlm` repo.
+
+**Rationale:**
+- The tools are already public and documented here (Phase 4 tag)
+- A separate repo adds maintenance overhead without meaningful privacy benefit
+- The library extraction (Phase 3) gives clean boundaries without a repo split
+- If the private production system needs deeper tooling, it can depend on this package
+
+**Recorded by:** Phase 7 implementation, 2026-06-03.

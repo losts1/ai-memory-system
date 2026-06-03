@@ -193,6 +193,8 @@ Remaining nice-to-haves tracked in Phase 7 (release).
 
 ### Phase 7: Release, Communication & Migration
 
+**Status: Complete (2026-06-03)**
+
 - Cut a `v0.2` / `v1.0` release of the updated redistribution package with the new multi-mind story.
 - Write a blog-style announcement or GitHub Discussion explaining the evolution and the new capabilities for other minds.
 - Provide a migration guide for existing users of the old template.
