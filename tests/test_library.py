@@ -121,3 +121,16 @@ def test_trace_parameter_caps_depth():
     """depth > MAX_DEPTH_CAP is silently capped — no error raised."""
     from ai_memory import graph
     assert graph.MAX_DEPTH_CAP >= 2
+
+
+def test_state_importable():
+    from ai_memory.state import MemoryStateManager
+    assert callable(MemoryStateManager)
+
+
+def test_memory_state_manager_has_expected_methods():
+    from ai_memory.state import MemoryStateManager
+    for method in ['init_session', 'record_query', 'mark_loaded',
+                   'get_pending', 'get_summary', 'load_fact', 'load_next',
+                   'cleanup', 'list_sessions', 'close']:
+        assert hasattr(MemoryStateManager, method), f"Missing method: {method}"
