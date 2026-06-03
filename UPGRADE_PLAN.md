@@ -75,7 +75,7 @@ Make the system **multi-mind by default** and **library-first**, so new agents (
 
 **Goal:** Make it natural and safe for multiple AIs (or subminds) to use the same graph.
 
-**Status (late May 2026):** Core foundations implemented and in review (PRs #28, #29, #30).
+**Status:** Complete (2026-06-03). All items ✅. See git log for PR history (#27–#31 + phase2/finish-multi-tenancy).
 
 **Key Changes (implemented or in progress):**
 
@@ -92,15 +92,17 @@ Make the system **multi-mind by default** and **library-first**, so new agents (
    - `neo4j_sync.py --assistant Weft` (tagging on write)
    - Backfill tool creates Assistant nodes + tags data
 
-   (Advanced private tools like traverse/memory_state still out of scope for this public package)
+   - `neo4j_traverse.py --assistant Weft` (filtering — phase2/finish-multi-tenancy)
 
 4. **New supported mode: "Read-only attached submind"** ✅
    - Strong documentation + practical examples in updated SUBMINDS.md
    - Option A (read-heavy) pattern is the recommended starting point
 
-5. **Documentation & examples** 🔄
-   - SUBMINDS.md and PHASE2-SCHEMA-PROPOSAL.md refreshed with real CLI usage
-   - Concrete examples for backfill + search + sync with assistant tagging
+5. **Documentation & examples** ✅
+   - SUBMINDS.md refreshed with real CLI usage and backfill/search/sync/traverse examples
+   - PHASE2-MULTI-TENANCY.md updated to reflect completion
+   - RLM.md updated with traverse `--assistant` examples
+   - `templates/submind/` added for new mind onboarding
 
 **Deliverables:**
 - Schema migration notes (even if mostly additive).

@@ -16,16 +16,19 @@ This repository contains the **public redistribution package** — the clean boo
 
 - **Phase 0** (Foundations & Decisions): Complete
 - **Phase 1** (Honest positioning + documentation): Complete
-- **Phase 2** (Multi-tenancy / Submind Foundations): **Core tooling implemented** (see open PRs #28, #29, #30)
+- **Phase 2** (Multi-tenancy / Submind Foundations): **Complete**
 
-**Phase 2 highlights (in review):**
-- `Assistant` nodes + `assistant` property on Fact/Session nodes
-- `scripts/neo4j_backfill_assistant.py` — production-hardened migration tool
+**Phase 2 highlights:**
+- `Assistant` nodes + `assistant` property on Fact/Session/Event nodes
+- `scripts/neo4j_backfill_assistant.py` — production-hardened migration tool (~12k node graphs)
 - `hybrid_memory_search.py --assistant Weft` — read-side filtering
-- `neo4j_sync.py --assistant Weft` — write-side tagging support
-- Updated SUBMINDS.md + schema proposal with real examples
+- `neo4j_sync.py --assistant Weft` — write-side tagging
+- `neo4j_traverse.py --assistant Weft` — RLM traversal scoped to a mind
+- `neo4j_learn_sync.py --assistant Weft` — learn-sync tagging
+- `neo4j_seed.py` creates `Assistant` constraint + `assistant` property indexes on fresh install
+- `templates/submind/` — starter files for new minds attaching to an existing graph
 
-New agents can attach to an existing mature graph as **subminds** (read-heavy "Option A" mode is well supported).
+New agents can attach to an existing mature graph as **subminds** (read-heavy "Option A" mode is fully supported and documented).
 
 **Phase 2 Quickstart (Multi-Mind)**
 
@@ -152,30 +155,49 @@ See the full guides:
 ## Package Structure
 
 ```
-redistribute/
+ai-memory-system/
+├── README.md
 ├── BOOTSTRAP.md              # First-run instructions for new AI
-├── README.md                 # This file
+├── UPGRADE_PLAN.md           # Phased evolution roadmap
+├── pyproject.toml            # Package definition + CLI entry point (Phase 6)
+├── requirements.txt
 ├── templates/
-│   ├── AGENTS.md             # Behavioral rules
+│   ├── AGENTS.md             # Behavioral rules template
 │   ├── SOUL.md               # Identity template
 │   ├── USER.md               # User profile template
 │   ├── TOOLS.md              # Local notes template
 │   ├── HEARTBEAT.md          # Periodic task template
 │   ├── MEMORY.md             # Long-term memory template
-│   ├── INDEX.qmd            # Memory index template
-│   └── core/
-│       ├── identity.qmd      # Identity QMD
-│       ├── people.qmd        # People QMD
-│       ├── preferences.qmd   # Preferences QMD
-│       └── setup.qmd         # Setup QMD
+│   ├── INDEX.qmd             # Memory index template
+│   ├── core/
+│   │   ├── identity.qmd      # Identity QMD
+│   │   ├── people.qmd        # People QMD
+│   │   ├── preferences.qmd   # Preferences QMD
+│   │   └── setup.qmd         # Setup QMD
+│   └── submind/              # Phase 2 — for minds attaching to an existing graph
+│       ├── identity.qmd      # Submind identity template
+│       └── setup.qmd         # Submind environment + multi-mind commands
 ├── scripts/
-│   ├── neo4j_seed.py         # Initialize Neo4j schema
-│   ├── hybrid_memory_search.py # Search memory
-│   └── neo4j_sync.py         # Sync sessions to graph
-└── docs/
-    ├── ARCHITECTURE.md       # System design
-    ├── CRON_JOBS.md          # Scheduled tasks
-    └── LEARNER.md            # Autonomous learning
+│   ├── cli.py                # Unified ai-memory CLI (Phase 6)
+│   ├── neo4j_seed.py         # Initialize Neo4j schema + indexes
+│   ├── neo4j_backfill_assistant.py  # Migrate existing graph for multi-mind (Phase 2)
+│   ├── hybrid_memory_search.py      # Search: vector + graph + FAISS + files
+│   ├── neo4j_sync.py                # Sync sessions → knowledge graph
+│   └── rlm/                  # Phase 4 — advanced RLM tools (experimental)
+│       ├── neo4j_traverse.py # Rich graph traversal + parameter tracing
+│       ├── memory_state.py   # Per-session lazy loading state
+│       ├── neo4j_learn_sync.py  # Ingest learner notes → Facts + Word index
+│       └── metadata.py       # Metadata helpers
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── CRON_JOBS.md
+│   ├── LEARNER.md
+│   ├── RLM.md                # Phase 4 RLM patterns
+│   ├── SUBMINDS.md           # Phase 2 multi-mind guide
+│   ├── PHASE2-MULTI-TENANCY.md
+│   └── PHASE2-SCHEMA-PROPOSAL.md
+└── tests/
+    └── test_cli_smoke.py     # Smoke tests (no Neo4j required)
 ```
 
 ---
