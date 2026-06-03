@@ -87,6 +87,14 @@ def test_parse_learned_topics_strips_time_annotation():
     assert results[0]["name"] == "Async IO"
 
 
+def test_parse_learned_topics_strips_utc_time():
+    from ai_memory.learn import parse_learned_topics
+    content = "## Learned: Async IO (15:30 UTC)\n- event loop\n"
+    results = parse_learned_topics(content, Path("2026-01-01.md"))
+    assert len(results) == 1
+    assert results[0]["name"] == "Async IO"
+
+
 def test_parse_learned_topics_multiple():
     from ai_memory.learn import parse_learned_topics
     content = (

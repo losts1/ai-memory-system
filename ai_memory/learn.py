@@ -15,6 +15,7 @@ Public API:
   rebuild_graph(workspace)                        — rebuild RELATED_TO edges
 """
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Set
@@ -102,9 +103,10 @@ def _clean_learned_title(title: str) -> str:
     title = re.sub(r'\s*\(Learner Cron[^)]*\)\s*$', '', title)
     title = re.sub(r'\s*\(\d+:\d+\s*[AP]M\s*EDT\)\s*$', '', title)
     title = re.sub(r'\s*\(\d+:\d+\s*[AP]M\)\s*$', '', title)
-    title = re.sub(r'\s*\(\d+:\s*UTC\)\s*$', '', title)
+    title = re.sub(r'\s*\(\d+:\d+\s*UTC\)\s*$', '', title)
     title = re.sub(r'\s*—\s*\d{4}-\d{2}-\d{2}\s+\d+:\d+.*$', '', title)
     title = re.sub(r'\s*\(\d{4}-\d{2}-\d{2}\)\s*$', '', title)
+    title = re.sub(r'\s*\(Learner\s*$', '', title)
     return title.strip()
 
 
@@ -124,8 +126,7 @@ def _parse_key_points_and_summary(body: str):
             in_list = True
         elif in_list and not line.startswith('#') and not line.startswith('**'):
             if not line.startswith('|'):
-                pass
-            summary_lines.append(line)
+                summary_lines.append(line)
         else:
             summary_lines.append(line)
             in_list = False
@@ -255,7 +256,7 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
             """, name=topic['name'], words=words)
         return True
     except Exception as e:
-        print(f"Error syncing topic '{topic.get('name', 'unknown')}': {e}")
+        print(f"Error syncing topic '{topic.get('name', 'unknown')}': {e}", file=sys.stderr)
         return False
 
 
