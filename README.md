@@ -17,6 +17,9 @@ This repository contains the **public redistribution package** — the clean boo
 - **Phase 0** (Foundations & Decisions): Complete
 - **Phase 1** (Honest positioning + documentation): Complete
 - **Phase 2** (Multi-tenancy / Submind Foundations): **Complete**
+- **Phase 3** (Core Library Extraction): **Complete**
+- **Phase 6** (Unified CLI): **Complete**
+- **Phase 7** (Release & Communication): **Complete**
 
 **Phase 2 highlights:**
 - `Assistant` nodes + `assistant` property on Fact/Session/Event nodes
@@ -48,6 +51,25 @@ See the full guides:
 - [DECISIONS.md](./DECISIONS.md)
 - [docs/SUBMINDS.md](./docs/SUBMINDS.md)
 - [docs/PHASE2-SCHEMA-PROPOSAL.md](./docs/PHASE2-SCHEMA-PROPOSAL.md)
+
+**Phase 3 highlights:**
+- `ai_memory` Python package — importable library extracted from scripts
+- `MemoryClient` facade: `client.search()`, `client.traverse()`, `client.trace_parameter()`, `client.state()`
+- All search/graph/state logic importable without copying scripts
+- Scripts remain as standalone CLI entry points (no breaking changes)
+- 35 tests covering library + CLI smoke tests
+
+**Phase 3 Quickstart (Library)**
+
+```python
+from ai_memory import MemoryClient
+
+with MemoryClient() as client:
+    results = client.search("transformer attention", assistant="Weft")
+    facts   = client.traverse("Attention Is All You Need", depth=2)
+```
+
+See [README — Library section](#library-phase-3) and [MIGRATION.md](./MIGRATION.md) for full details.
 
 ---
 
@@ -159,7 +181,9 @@ ai-memory-system/
 ├── README.md
 ├── BOOTSTRAP.md              # First-run instructions for new AI
 ├── UPGRADE_PLAN.md           # Phased evolution roadmap
-├── pyproject.toml            # Package definition + CLI entry point (coming in Phase 6)
+├── pyproject.toml            # Package definition (v1.0.0) + `ai-memory` CLI entry point
+├── CHANGELOG.md              # Version history
+├── MIGRATION.md              # Upgrade guide for existing users
 ├── requirements.txt
 ├── templates/
 │   ├── AGENTS.md             # Behavioral rules template
@@ -177,6 +201,13 @@ ai-memory-system/
 │   └── submind/              # Phase 2 — for minds attaching to an existing graph
 │       ├── identity.qmd      # Submind identity template
 │       └── setup.qmd         # Submind environment + multi-mind commands
+├── ai_memory/                # Importable Python library (Phase 3)
+│   ├── __init__.py           # MemoryClient facade + all re-exports
+│   ├── _config.py            # get_workspace, get_driver
+│   ├── metadata.py           # apply_metadata_only, apply_fields_filter, make_teaser
+│   ├── search.py             # search_vector, search_graph, search_files, search_faiss
+│   ├── graph.py              # traverse, trace_parameter, graph_stats
+│   └── state.py              # MemoryStateManager (per-session lazy loading)
 ├── scripts/
 │   ├── cli.py                # Unified ai-memory CLI (Phase 6)
 │   ├── neo4j_seed.py         # Initialize Neo4j schema + indexes
@@ -197,7 +228,8 @@ ai-memory-system/
 │   ├── PHASE2-MULTI-TENANCY.md
 │   └── PHASE2-SCHEMA-PROPOSAL.md
 └── tests/
-    └── test_cli_smoke.py     # Smoke tests (no Neo4j required)
+    ├── test_cli_smoke.py     # CLI smoke tests (no Neo4j required)
+    └── test_library.py       # Library smoke tests (no Neo4j required)
 ```
 
 ---
