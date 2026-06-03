@@ -114,7 +114,7 @@ Once the above are settled:
 
 ---
 
-## D-005: Long-Term Home for Advanced RLM Code
+## D-007: Long-Term Home for Advanced RLM Code
 
 **Date:** 2026-06-03
 **Status:** **Decided**
