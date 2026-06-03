@@ -191,7 +191,7 @@ def traverse(
     Returns a result dict with keys: success, start, depth, relationship,
     assistant, total_nodes, nodes.
     """
-    depth = min(depth, MAX_DEPTH_CAP)
+    depth = max(1, min(depth, MAX_DEPTH_CAP))
     fields = fields or ['name']
 
     if relationship not in _ALLOWED_RELS:
@@ -201,8 +201,9 @@ def traverse(
         }
 
     cypher = _build_traversal_cypher(relationship, depth, fields, metadata_only, bool(filter_word))
-    driver = get_driver(workspace)
+    driver = None
     try:
+        driver = get_driver(workspace)
         nodes: List[Dict] = []
         visited: Set[str] = {start}
         with driver.session() as session:
@@ -227,7 +228,8 @@ def traverse(
             except Exception as e:
                 return {'success': False, 'error': f'Traversal query failed: {e}'}
     finally:
-        driver.close()
+        if driver is not None:
+            driver.close()
 
     return {
         'success': True,
@@ -255,7 +257,7 @@ def trace_parameter(
     RLM-style parameter tracing: follow RELATED_TO / SHARES_PARAMETER edges
     and return only nodes whose key_points or Words contain `parameter`.
     """
-    depth = min(depth, MAX_DEPTH_CAP)
+    depth = max(1, min(depth, MAX_DEPTH_CAP))
     fields = fields or ['name', 'teaser', 'kp_count', 'related_count', 'top_words']
 
     cypher = """
@@ -280,8 +282,9 @@ def trace_parameter(
         LIMIT $max_nodes
     """ % {'depth': depth}
 
-    driver = get_driver(workspace)
+    driver = None
     try:
+        driver = get_driver(workspace)
         nodes: List[Dict] = []
         visited: Set[str] = {start}
         with driver.session() as session:
@@ -303,7 +306,8 @@ def trace_parameter(
             except Exception as e:
                 return {'success': False, 'error': f'Parameter trace query failed: {e}'}
     finally:
-        driver.close()
+        if driver is not None:
+            driver.close()
 
     return {
         'success': True,
@@ -318,8 +322,9 @@ def trace_parameter(
 
 def graph_stats(*, workspace=None) -> Dict[str, Any]:
     """Return graph statistics: node counts by label, edge counts, average Fact degree."""
-    driver = get_driver(workspace)
+    driver = None
     try:
+        driver = get_driver(workspace)
         stats: Dict[str, Any] = {}
         with driver.session() as session:
             stats['node_counts'] = _get_label_counts(session)
@@ -340,5 +345,6 @@ def graph_stats(*, workspace=None) -> Dict[str, Any]:
             except Exception:
                 pass
     finally:
-        driver.close()
+        if driver is not None:
+            driver.close()
     return {'success': True, 'stats': stats}
