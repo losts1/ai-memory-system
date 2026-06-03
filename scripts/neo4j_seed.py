@@ -38,6 +38,8 @@ def create_schema(driver):
         constraints = [
             "CREATE CONSTRAINT fact_id_unique IF NOT EXISTS FOR (f:Fact) REQUIRE f.id IS UNIQUE",
             "CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
+            # Phase 2 multi-tenancy: Assistant nodes must have unique stable IDs
+            "CREATE CONSTRAINT assistant_id_unique IF NOT EXISTS FOR (a:Assistant) REQUIRE a.id IS UNIQUE",
         ]
 
         for constraint in constraints:
@@ -53,6 +55,9 @@ def create_schema(driver):
         indexes = [
             "CREATE INDEX session_date_idx IF NOT EXISTS FOR (s:Session) ON (s.date)",
             "CREATE INDEX fact_source_idx IF NOT EXISTS FOR (f:Fact) ON (f.source)",
+            # Phase 2 multi-tenancy: efficient filtering by assistant/mind
+            "CREATE INDEX fact_assistant_idx IF NOT EXISTS FOR (f:Fact) ON (f.assistant)",
+            "CREATE INDEX session_assistant_idx IF NOT EXISTS FOR (s:Session) ON (s.assistant)",
         ]
 
         for index in indexes:

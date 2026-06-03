@@ -96,3 +96,12 @@ def test_cli_traverse_advertises_assistant():
     result = run_cli(["traverse", "--help"])
     assert result.returncode == 0
     assert "--assistant" in result.stdout
+
+
+def test_seed_has_assistant_schema():
+    """neo4j_seed.py must declare the Assistant constraint and assistant property indexes."""
+    path = REPO_ROOT / "scripts" / "neo4j_seed.py"
+    content = path.read_text()
+    assert "assistant_id_unique" in content, "Missing Assistant uniqueness constraint"
+    assert "fact_assistant_idx" in content, "Missing Fact.assistant index"
+    assert "session_assistant_idx" in content, "Missing Session.assistant index"
