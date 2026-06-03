@@ -159,7 +159,7 @@ ai-memory-system/
 ├── README.md
 ├── BOOTSTRAP.md              # First-run instructions for new AI
 ├── UPGRADE_PLAN.md           # Phased evolution roadmap
-├── pyproject.toml            # Package definition + CLI entry point (Phase 6)
+├── pyproject.toml            # Package definition + CLI entry point (coming in Phase 6)
 ├── requirements.txt
 ├── templates/
 │   ├── AGENTS.md             # Behavioral rules template
