@@ -73,8 +73,10 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_traverse(args: argparse.Namespace) -> int:
-    extra = ["--start", args.start]
-    if args.depth:
+    extra = []
+    if args.start:
+        extra += ["--start", args.start]
+    if args.depth is not None:
         extra += ["--depth", str(args.depth)]
     if args.parameter:
         extra += ["--parameter", args.parameter]
@@ -184,7 +186,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # traverse
     p = subparsers.add_parser("traverse", help="Graph traversal with optional parameter tracing")
-    p.add_argument("--start", required=True, help="Starting Fact name")
+    p.add_argument("--start", help="Starting Fact name")
     p.add_argument("--depth", type=int, default=2)
     p.add_argument("--parameter", help="Parameter tracing mode (e.g. gamma, inventory)")
     p.add_argument("--filter-word", help="Filter traversal to nodes containing this word")
