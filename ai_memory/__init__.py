@@ -29,6 +29,11 @@ from ai_memory.metadata import apply_fields_filter, apply_metadata_only, make_te
 from ai_memory.search import search_faiss, search_files, search_graph, search_vector
 from ai_memory.graph import graph_stats, trace_parameter as _trace_parameter, traverse as _traverse
 from ai_memory.state import MemoryStateManager
+from ai_memory.learn import (
+    parse_learned_topics,
+    sync_facts as _sync_facts,
+    rebuild_graph as _rebuild_graph,
+)
 
 from pathlib import Path
 from typing import List, Optional
@@ -37,6 +42,8 @@ from typing import List, Optional
 # `from ai_memory import traverse` works as expected.
 traverse = _traverse
 trace_parameter = _trace_parameter
+sync_facts = _sync_facts
+rebuild_graph = _rebuild_graph
 
 
 class MemoryClient:
@@ -195,6 +202,50 @@ class MemoryClient:
         """
         return MemoryStateManager(workspace=self._workspace)
 
+    # ------------------------------------------------------------------
+    # Learn sync
+    # ------------------------------------------------------------------
+
+    def learn(
+        self,
+        days: int = 30,
+        *,
+        assistant: Optional[str] = None,
+    ) -> int:
+        """Parse learned topics from the last `days` days and sync to Neo4j.
+
+        Scans {workspace}/memory/*.md for daily notes in the time window.
+        Returns the count of successfully synced Fact nodes.
+
+        Note: does not apply saturation filtering. For production sync with
+        deduplication, use the `ai-memory learn-sync` CLI command.
+        """
+        import re
+        from datetime import datetime, timedelta
+
+        memory_dir = self._workspace / 'memory'
+        if not memory_dir.exists():
+            return 0
+
+        cutoff = datetime.now() - timedelta(days=days)
+        topics = []
+        for filepath in sorted(memory_dir.glob('*.md')):
+            if not re.match(r'\d{4}-\d{2}-\d{2}\.md$', filepath.name):
+                continue
+            try:
+                mtime = datetime.fromtimestamp(filepath.stat().st_mtime)
+            except OSError:
+                continue
+            if mtime < cutoff:
+                continue
+            try:
+                content = filepath.read_text(encoding='utf-8', errors='replace')
+            except OSError:
+                continue
+            topics.extend(parse_learned_topics(content, filepath))
+
+        return _sync_facts(topics, workspace=self._workspace, assistant=assistant)
+
 
 __all__ = [
     'MemoryClient',
@@ -211,4 +262,7 @@ __all__ = [
     'apply_metadata_only',
     'apply_fields_filter',
     'make_teaser',
+    'parse_learned_topics',
+    'sync_facts',
+    'rebuild_graph',
 ]
