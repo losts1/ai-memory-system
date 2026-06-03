@@ -32,6 +32,7 @@ class MemoryStateManager:
     """
 
     def __init__(self, workspace=None):
+        self.driver = None
         self.driver = get_driver(workspace)
 
     def close(self):
