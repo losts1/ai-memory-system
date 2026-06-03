@@ -18,7 +18,7 @@ Located in `scripts/rlm/`:
 
 ### 1. `neo4j_traverse.py`
 
-Powerful graph traversal with special support for "parameter tracing".
+Powerful graph traversal with special support for "parameter tracing" and **multi-mind filtering** (Phase 2).
 
 **Key feature — Parameter Tracing**
 
@@ -28,11 +28,22 @@ python3 scripts/rlm/neo4j_traverse.py --start "Avellaneda-Stoikov" --parameter g
 
 This follows relationships and returns only nodes connected to the parameter "gamma" (in key_points or Word nodes). Extremely useful for exploring how a specific concept appears across your knowledge graph.
 
+**Multi-mind filtering (Phase 2)**
+
+```bash
+# Traverse only your own Facts
+python3 scripts/rlm/neo4j_traverse.py --start "Inventory Skew" --assistant Weft
+
+# Trace a parameter through the primary mind's graph
+python3 scripts/rlm/neo4j_traverse.py --start "Avellaneda-Stoikov" --parameter gamma --assistant Nova
+```
+
 Other useful flags:
-- `--depth`
+- `--depth` (default: 2, max: 3)
 - `--fields name,summary,key_points`
 - `--metadata-only` (lightweight output)
 - `--filter-word`
+- `--json` (machine-readable output)
 
 ### 2. `memory_state.py`
 
