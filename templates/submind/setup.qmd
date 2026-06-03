@@ -1,0 +1,91 @@
+---
+id: setup-[submind-name]
+type: setup
+tags: [setup, environment, submind]
+created: [DATE]
+updated: "[DATETIME]"
+version: 1.0
+priority: medium
+status: active
+summary: "Environment and Neo4j attachment details for [Submind Name]"
+---
+
+# Setup: [Submind Name] — Submind Attachment
+
+## Attached Graph
+
+| Property | Value |
+|----------|-------|
+| Primary Mind | [Primary Mind Name] |
+| Neo4j URI | bolt://localhost:7687 |
+| Access Level | read-only / limited-write |
+| My Assistant Tag | **[Submind Name]** — use this everywhere |
+
+## Initial Backfill (Run Once)
+
+Before your first write, tag historical data and register your Assistant node:
+
+```bash
+source ~/.ai-memory/neo4j-venv/bin/activate
+
+# Dry-run first — review what will be tagged
+python3 ~/.ai-memory/scripts/neo4j_backfill_assistant.py \
+  --primary "[Primary Mind Name]" \
+  --additional "[Submind Name]" \
+  --dry-run
+
+# Apply when satisfied
+python3 ~/.ai-memory/scripts/neo4j_backfill_assistant.py \
+  --primary "[Primary Mind Name]" \
+  --additional "[Submind Name]"
+```
+
+## Multi-Mind Commands
+
+> Standard scripts are at `~/.ai-memory/scripts/`. Advanced RLM tools (`neo4j_traverse.py`, `neo4j_learn_sync.py`) are in the `rlm/` subdirectory.
+
+```bash
+# Search scoped to your mind only
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your query" --assistant [Submind Name]
+
+# Search the primary mind's knowledge (--mind filters to a different mind's Facts)
+python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your query" --mind [Primary Mind Name]
+
+# Traverse the graph from one of your Facts
+python3 ~/.ai-memory/scripts/rlm/neo4j_traverse.py \
+  --start "Fact Name" --assistant [Submind Name]
+
+# RLM parameter trace scoped to your mind
+python3 ~/.ai-memory/scripts/rlm/neo4j_traverse.py \
+  --start "Fact Name" --parameter gamma --assistant [Submind Name]
+
+# Sync new session data tagged as yourself
+python3 ~/.ai-memory/scripts/neo4j_sync.py --assistant [Submind Name]
+
+# Ingest learner notes as yourself
+python3 ~/.ai-memory/scripts/rlm/neo4j_learn_sync.py --days 7 --assistant [Submind Name]
+```
+
+## Key Paths
+
+| Purpose | Path |
+|---------|------|
+| Workspace | `~/.ai-memory/` |
+| Memory | `~/.ai-memory/memory/` |
+| Scripts | `~/.ai-memory/scripts/` |
+| Neo4j venv | `~/.ai-memory/neo4j-venv/` |
+| Neo4j creds | `~/.ai-memory/.env.neo4j` |
+
+## Hardware & Services
+
+- **Machine:** [e.g., RTX 5070 Ti, 32 GB RAM]
+- **OS:** [e.g., Linux 6.17, Ubuntu 24.04]
+
+| Service | Port | Status |
+|---------|------|--------|
+| Neo4j (shared) | 7687 | [Running] |
+| Ollama | 11434 | [Optional — for embeddings] |
+
+---
+
+_Update as environment changes._

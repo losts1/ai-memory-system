@@ -81,3 +81,27 @@ def test_import_key_modules():
         # Basic syntax check via compile
         with open(path) as f:
             compile(f.read(), str(path), "exec")
+
+
+def test_traverse_script_advertises_assistant():
+    """neo4j_traverse.py --help must show --assistant flag."""
+    cmd = [sys.executable, str(REPO_ROOT / "scripts" / "rlm" / "neo4j_traverse.py"), "--help"]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0
+    assert "--assistant" in result.stdout
+
+
+def test_cli_traverse_advertises_assistant():
+    """ai-memory traverse --help must show --assistant flag."""
+    result = run_cli(["traverse", "--help"])
+    assert result.returncode == 0
+    assert "--assistant" in result.stdout
+
+
+def test_seed_has_assistant_schema():
+    """neo4j_seed.py must declare the Assistant constraint and assistant property indexes."""
+    path = REPO_ROOT / "scripts" / "neo4j_seed.py"
+    content = path.read_text()
+    assert "assistant_id_unique" in content, "Missing Assistant uniqueness constraint"
+    assert "fact_assistant_idx" in content, "Missing Fact.assistant index"
+    assert "session_assistant_idx" in content, "Missing Session.assistant index"

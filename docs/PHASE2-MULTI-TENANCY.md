@@ -1,6 +1,23 @@
 # Phase 2: Multi-Tenancy & Submind Foundations
 
-**Status:** Initial Scoping (Draft) — 2026-05-27
+**Status:** Complete — 2026-06-03
+
+All core Phase 2 items are implemented and merged. See UPGRADE_PLAN.md for the full summary.
+
+**What was delivered:**
+- `neo4j_backfill_assistant.py` — production-hardened migration tool (PR #27)
+- `hybrid_memory_search.py --assistant/--mind` — read-side filtering (PR #28)
+- `neo4j_sync.py --assistant` — write-side tagging (PR #29)
+- `neo4j_learn_sync.py --assistant` — learn-sync tagging (Phase 4)
+- `neo4j_traverse.py --assistant/--mind` — traversal filtering (phase2/finish-multi-tenancy)
+- `neo4j_seed.py` — Assistant constraint + assistant property indexes
+- `templates/submind/` — starter identity and setup templates
+- `docs/SUBMINDS.md` — fully updated with real CLI examples (PR #30)
+
+**Scope boundary (intentional):** Full automatic namespacing and hard enforcement remain out of scope
+for the public package. Tracked for Phase 3 (core library extraction).
+
+---
 
 This document outlines the concrete work needed for **Phase 2** of the upgrade plan: making the system properly support multiple minds (subminds) on the same graph.
 

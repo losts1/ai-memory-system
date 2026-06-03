@@ -60,8 +60,6 @@ def cmd_search(args: argparse.Namespace) -> int:
     extra = []
     if args.assistant:
         extra += ["--assistant", args.assistant]
-    if args.mind:
-        extra += ["--mind", args.mind]
     if args.graph:
         extra += ["--graph"]
     if args.metadata_only:
@@ -75,8 +73,10 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_traverse(args: argparse.Namespace) -> int:
-    extra = ["--start", args.start]
-    if args.depth:
+    extra = []
+    if args.start:
+        extra += ["--start", args.start]
+    if args.depth is not None:
         extra += ["--depth", str(args.depth)]
     if args.parameter:
         extra += ["--parameter", args.parameter]
@@ -88,6 +88,8 @@ def cmd_traverse(args: argparse.Namespace) -> int:
         extra += ["--metadata-only"]
     if args.stats:
         extra += ["--stats"]
+    if args.assistant:
+        extra += ["--assistant", args.assistant]
 
     return _run_script("rlm/neo4j_traverse.py", extra)
 
@@ -98,8 +100,6 @@ def cmd_sync(args: argparse.Namespace) -> int:
         extra.append("--full")
     if args.assistant:
         extra += ["--assistant", args.assistant]
-    if args.mind:
-        extra += ["--mind", args.mind]
 
     return _run_script("neo4j_sync.py", extra)
 
@@ -116,8 +116,6 @@ def cmd_learn_sync(args: argparse.Namespace) -> int:
         extra.append("--rebuild-graph")
     if args.assistant:
         extra += ["--assistant", args.assistant]
-    if args.mind:
-        extra += ["--mind", args.mind]
 
     return _run_script("rlm/neo4j_learn_sync.py", extra)
 
@@ -188,13 +186,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     # traverse
     p = subparsers.add_parser("traverse", help="Graph traversal with optional parameter tracing")
-    p.add_argument("--start", required=True, help="Starting Fact name")
+    p.add_argument("--start", help="Starting Fact name")
     p.add_argument("--depth", type=int, default=2)
     p.add_argument("--parameter", help="Parameter tracing mode (e.g. gamma, inventory)")
     p.add_argument("--filter-word", help="Filter traversal to nodes containing this word")
     p.add_argument("--fields", help="Fields to return")
     p.add_argument("--metadata-only", action="store_true")
     p.add_argument("--stats", action="store_true", help="Show graph statistics")
+    p.add_argument("--assistant", "--mind", dest="assistant",
+                   help="Filter results to only Facts created by this assistant/mind "
+                        "(e.g. Weft, Nova). Matches the Phase 2 assistant property.")
     p.set_defaults(func=cmd_traverse)
 
     # sync

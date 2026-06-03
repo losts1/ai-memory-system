@@ -31,6 +31,8 @@ Usage:
     python3 neo4j_traverse.py --start "Avellaneda-Stoikov" --filter-word gamma
     python3 neo4j_traverse.py --start "Avellaneda-Stoikov" --parameter gamma
     python3 neo4j_traverse.py --stats
+    python3 neo4j_traverse.py --start "Avellaneda-Stoikov" --assistant Weft
+    python3 neo4j_traverse.py --start "Avellaneda-Stoikov" --parameter gamma --assistant Nova
 
 The --parameter mode is particularly powerful for RLM-style work:
 it traces how a specific concept/parameter (e.g. "gamma", "inventory", "kill switch")
@@ -92,16 +94,22 @@ def _format_node(record_name: str, record: Dict, fields: List[str], metadata_onl
     """Format a node record according to requested fields / metadata_only flag."""
     if metadata_only:
         summary = record.get('summary', '') or ''
-        return {
+        node = {
             'name': record_name,
             'teaser': _make_teaser(summary),
             'kp_count': len(record.get('key_points') or []),
             'related_count': record.get('related_count', 0),
             'top_words': record.get('top_words') or []
         }
+        if record.get('assistant_tag'):
+            node['assistant'] = record['assistant_tag']
+        return node
 
     if not fields or fields == ['name']:
-        return {'name': record_name}
+        node = {'name': record_name}
+        if record.get('assistant_tag'):
+            node['assistant'] = record['assistant_tag']
+        return node
 
     node: Dict[str, Any] = {'name': record_name}
     for f in fields:
@@ -117,6 +125,8 @@ def _format_node(record_name: str, record: Dict, fields: List[str], metadata_onl
             node['related_count'] = record.get('related_count', 0)
         elif f == 'top_words':
             node['top_words'] = record.get('top_words') or []
+    if record.get('assistant_tag'):
+        node['assistant'] = record['assistant_tag']
     return node
 
 
@@ -126,7 +136,7 @@ def _build_traversal_cypher(rel_type: str, depth: int, fields: List[str], metada
     need_kp = metadata_only or 'key_points' in fields or 'kp_count' in fields or needs_filter
     need_words = metadata_only or 'top_words' in fields or 'related_count' in fields or needs_filter
 
-    return_parts = ['f.name AS name']
+    return_parts = ['f.name AS name', 'f.assistant AS assistant_tag']
     if need_summary:
         return_parts.append('f.summary AS summary')
     if need_kp:
@@ -140,6 +150,7 @@ def _build_traversal_cypher(rel_type: str, depth: int, fields: List[str], metada
     return f"""
         MATCH (start:Fact {{name: $start_name}})-[:{rel_type}*1..{depth}]-(f:Fact)
         WHERE f.name <> $start_name
+          AND ($assistant IS NULL OR f.assistant = $assistant)
         WITH DISTINCT f
         OPTIONAL MATCH (f)-[:HAS_WORD]->(w:Word)
         WITH f, collect(w.text) AS word_list
@@ -192,7 +203,8 @@ def traverse_neighborhood(
     fields: List[str],
     filter_word: Optional[str],
     max_nodes: int,
-    metadata_only: bool
+    metadata_only: bool,
+    assistant: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Expand the neighborhood of a starting Fact node up to `depth` hops.
@@ -217,7 +229,11 @@ def traverse_neighborhood(
             return {'success': False, 'error': f'Fact node not found: {start!r}'}
 
         try:
-            records = session.run(cypher, {'start_name': start, 'max_nodes': max_nodes})
+            records = session.run(cypher, {
+                'start_name': start,
+                'max_nodes': max_nodes,
+                'assistant': assistant,
+            })
 
             def filter_fn(rec):
                 return _node_matches_filter(rec, filter_word) if filter_word else True
@@ -234,53 +250,7 @@ def traverse_neighborhood(
         'start': start,
         'depth': depth,
         'relationship': rel_type,
-        'total_nodes': len(nodes),
-        'nodes': nodes
-    }
-
-    nodes: List[Dict[str, Any]] = []
-    visited: Set[str] = {start}
-
-    with driver.session() as session:
-        # First verify start node exists
-        check = session.run(
-            "MATCH (f:Fact {name: $name}) RETURN f.name AS name LIMIT 1",
-            {'name': start}
-        )
-        if not check.single():
-            return {'success': False, 'error': f'Fact node not found: {start!r}'}
-
-        try:
-            records = session.run(cypher, {'start_name': start, 'max_nodes': max_nodes})
-            for record in records:
-                node_name = record['name']
-                if node_name in visited:
-                    continue
-                visited.add(node_name)
-
-                rec_dict = dict(record)
-
-                # Apply word filter if requested
-                if filter_word:
-                    top_words = rec_dict.get('top_words') or []
-                    kp_text = ' '.join(rec_dict.get('key_points') or [])
-                    if (filter_word.lower() not in [w.lower() for w in top_words]
-                            and filter_word.lower() not in kp_text.lower()):
-                        continue
-
-                nodes.append(_format_node(node_name, rec_dict, fields, metadata_only))
-
-                if len(nodes) >= max_nodes:
-                    break
-
-        except Exception as e:
-            return {'success': False, 'error': f'Traversal query failed: {e}'}
-
-    return {
-        'success': True,
-        'start': start,
-        'depth': depth,
-        'relationship': rel_type,
+        'assistant': assistant,
         'total_nodes': len(nodes),
         'nodes': nodes
     }
@@ -293,7 +263,8 @@ def trace_parameter(
     depth: int,
     max_nodes: int,
     metadata_only: bool,
-    fields: List[str] = None
+    fields: List[str] = None,
+    assistant: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Trace a parameter through the graph (RLM-style).
@@ -307,6 +278,7 @@ def trace_parameter(
     cypher = """
         MATCH (start:Fact {name: $start_name})-[:RELATED_TO|SHARES_PARAMETER*1..%(depth)d]-(f:Fact)
         WHERE f.name <> $start_name
+          AND ($assistant IS NULL OR f.assistant = $assistant)
           AND (any(kp IN f.key_points WHERE toLower(kp) CONTAINS $param)
                OR EXISTS {
                    MATCH (f)-[:HAS_WORD]->(w:Word)
@@ -321,6 +293,7 @@ def trace_parameter(
         RETURN f.name AS name,
                f.summary AS summary,
                f.key_points AS key_points,
+               f.assistant AS assistant_tag,
                COUNT { MATCH (f)-[:RELATED_TO]->() } AS related_count,
                word_list[0..5] AS top_words
         LIMIT $max_nodes
@@ -341,7 +314,8 @@ def trace_parameter(
             records = session.run(cypher, {
                 'start_name': start,
                 'param': parameter.lower(),
-                'max_nodes': max_nodes
+                'max_nodes': max_nodes,
+                'assistant': assistant,
             })
 
             def param_filter_fn(rec):
@@ -360,6 +334,7 @@ def trace_parameter(
         'start': start,
         'parameter': parameter,
         'depth': depth,
+        'assistant': assistant,
         'total_nodes': len(nodes),
         'nodes': nodes
     }
@@ -469,6 +444,10 @@ Examples:
     parser.add_argument('--json', action='store_true', help='Output as JSON')
     parser.add_argument('--metadata-only', action='store_true',
                         help='Return only metadata (name, teaser, kp_count, related_count, top_words) per node')
+    parser.add_argument('--assistant', '--mind', dest='assistant',
+                        help='Filter results to only Facts created by this assistant/mind '
+                             '(e.g. Weft, Nova). Matches the Phase 2 assistant property. '
+                             'Use to traverse your own Facts or scope results to one mind.')
 
     args = parser.parse_args()
 
@@ -496,7 +475,8 @@ Examples:
                 depth=args.depth,
                 max_nodes=args.max_nodes,
                 metadata_only=args.metadata_only,
-                fields=field_list
+                fields=field_list,
+                assistant=args.assistant,
             )
             _print_result(result, args.json, _print_parameter_result)
 
@@ -509,7 +489,8 @@ Examples:
                 fields=field_list,
                 filter_word=args.filter_word,
                 max_nodes=args.max_nodes,
-                metadata_only=args.metadata_only
+                metadata_only=args.metadata_only,
+                assistant=args.assistant,
             )
             _print_result(result, args.json, _print_traversal_result)
 
@@ -559,6 +540,8 @@ def _print_traversal_result(result: Dict):
 def _print_node(node: Dict[str, Any]) -> None:
     """Pretty-print a single node result."""
     print(f"\n  {node.get('name', '?')}")
+    if node.get('assistant'):
+        print(f"    [assistant: {node['assistant']}]")
     if node.get('teaser'):
         print(f"    {node['teaser']}")
     if 'kp_count' in node or 'related_count' in node:
