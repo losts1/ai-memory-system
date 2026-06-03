@@ -101,3 +101,23 @@ def test_search_faiss_missing_index(tmp_path):
     from ai_memory.search import search_faiss
     result = search_faiss("anything", workspace=tmp_path)
     assert result == []
+
+
+def test_graph_importable():
+    from ai_memory.graph import traverse, trace_parameter, graph_stats
+    assert callable(traverse)
+    assert callable(trace_parameter)
+    assert callable(graph_stats)
+
+
+def test_traverse_rejects_bad_relationship():
+    from ai_memory.graph import traverse
+    result = traverse("SomeFact", relationship="EVIL_REL")
+    assert result["success"] is False
+    assert "Unknown relationship" in result["error"]
+
+
+def test_trace_parameter_caps_depth():
+    """depth > MAX_DEPTH_CAP is silently capped — no error raised."""
+    from ai_memory import graph
+    assert graph.MAX_DEPTH_CAP >= 2
