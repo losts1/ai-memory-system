@@ -42,11 +42,13 @@ python3 ~/.ai-memory/scripts/neo4j_backfill_assistant.py \
 
 ## Multi-Mind Commands
 
+> Standard scripts are at `~/.ai-memory/scripts/`. Advanced RLM tools (`neo4j_traverse.py`, `neo4j_learn_sync.py`) are in the `rlm/` subdirectory.
+
 ```bash
 # Search scoped to your mind only
 python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your query" --assistant [Submind Name]
 
-# Search the primary mind's knowledge
+# Search the primary mind's knowledge (--mind filters to a different mind's Facts)
 python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your query" --mind [Primary Mind Name]
 
 # Traverse the graph from one of your Facts
