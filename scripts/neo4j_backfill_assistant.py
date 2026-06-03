@@ -119,7 +119,7 @@ def ensure_assistant_node(driver, assistant_id: str, name: str, assistant_type: 
             a.created_at = datetime()
         ON MATCH SET
             a.name = coalesce(a.name, $name),
-            a.type = coalesce(a.type, $type)
+            a.type = $type
     """
     with driver.session() as session:
         session.run(query, id=assistant_id, name=name, type=assistant_type)
@@ -172,6 +172,7 @@ def backfill_label(
         id_query = f"""
             MATCH (n:{label})
             WHERE n.assistant IS NULL
+              AND n.id IS NOT NULL
             RETURN n.id AS id
             LIMIT $batch
         """
@@ -222,7 +223,7 @@ def create_created_by_relationships(
             count_q = f"""
                 MATCH (a:Assistant {{id: $aid}})
                 MATCH (n:{label} {{assistant: $aid}})
-                WHERE NOT (a)-[:CREATED_BY]->(n)
+                WHERE NOT (n)-[:CREATED_BY]->(a)
                 RETURN count(n) AS c
             """
             try:
@@ -247,7 +248,7 @@ def create_created_by_relationships(
                 pair_q = f"""
                     MATCH (a:Assistant {{id: $aid}})
                     MATCH (n:{label} {{assistant: $aid}})
-                    WHERE NOT (a)-[:CREATED_BY]->(n)
+                    WHERE NOT (n)-[:CREATED_BY]->(a)
                     RETURN n.id AS nid, a.id AS aid
                     LIMIT $batch
                 """
@@ -257,12 +258,12 @@ def create_created_by_relationships(
                 if not pairs:
                     break
 
-                create_q = """
+                create_q = f"""
                     UNWIND $pairs AS p
-                    MATCH (a:Assistant {id: p[1]})
-                    MATCH (n {id: p[0]})
-                    WHERE NOT (a)-[:CREATED_BY]->(n)
-                    CREATE (a)-[:CREATED_BY]->(n)
+                    MATCH (a:Assistant {{id: p[1]}})
+                    MATCH (n:{label} {{id: p[0]}})
+                    WHERE NOT (n)-[:CREATED_BY]->(a)
+                    CREATE (n)-[:CREATED_BY]->(a)
                     RETURN count(*) AS done
                 """
                 with driver.session() as s:

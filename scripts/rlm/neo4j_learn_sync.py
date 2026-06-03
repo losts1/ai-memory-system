@@ -441,7 +441,7 @@ def sync_fact(tx, topic: dict, assistant: str | None = None) -> bool:
         if assistant:
             tx.run("""
                 MERGE (a:Assistant {id: $assistant})
-                ON CREATE SET a.name = $assistant, a.type = 'submind', a.created_at = datetime()
+                ON CREATE SET a.name = $assistant, a.created_at = datetime()
             """, assistant=assistant)
 
         # Word index edges (unchanged)

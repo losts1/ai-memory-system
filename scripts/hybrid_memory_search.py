@@ -311,40 +311,40 @@ def main():
         format_output(results, "Files")
         return
 
-    # Semantic search — FAISS (local) or Neo4j vector
+    # Collect all results first, then apply transforms, then output
     if args.use_embeddings:
-        print("Semantic result (FAISS Local)")
         semantic_results = search_faiss(args.query, args.max_results)
-        format_output(semantic_results, "FAISS")
+        sem_label = "FAISS"
     else:
-        print(f"Semantic result (Neo4j Vector){' [' + assistant + ']' if assistant else ''}")
         semantic_results = search_neo4j_vector(args.query, args.max_results, assistant=assistant)
-        format_output(semantic_results, "Neo4j Vector")
+        sem_label = f"Neo4j Vector{' [' + assistant + ']' if assistant else ''}"
 
-    # Graph search (if requested)
+    graph_results = []
     if args.graph:
-        print(f"\nGraph Relationships (Neo4j){' [' + assistant + ']' if assistant else ''}")
         graph_results = search_neo4j_graph(args.query, args.max_results, assistant=assistant)
-        format_output(graph_results, "Neo4j Graph")
 
-    # File search
-    print("\nFile Search (grep)")
     file_results = search_files(args.query, args.max_results)
 
-    # Phase 4: Apply metadata-only or fields filter if requested
+    # Phase 4: Apply metadata-only or fields filter to all result sets before output
     if args.metadata_only:
         semantic_results = [_apply_metadata_only_local(r) for r in semantic_results]
-        if args.graph:
-            graph_results = [_apply_metadata_only_local(r) for r in graph_results]
+        graph_results = [_apply_metadata_only_local(r) for r in graph_results]
         file_results = [_apply_metadata_only_local(r) for r in file_results]
 
     if args.fields:
         requested = [f.strip() for f in args.fields.split(',')]
         semantic_results = [_apply_fields_filter_local(r, requested) for r in semantic_results]
-        if args.graph:
-            graph_results = [_apply_fields_filter_local(r, requested) for r in graph_results]
+        graph_results = [_apply_fields_filter_local(r, requested) for r in graph_results]
         file_results = [_apply_fields_filter_local(r, requested) for r in file_results]
 
+    print(f"Semantic result ({sem_label})")
+    format_output(semantic_results, sem_label)
+
+    if args.graph:
+        print(f"\nGraph Relationships (Neo4j){' [' + assistant + ']' if assistant else ''}")
+        format_output(graph_results, "Neo4j Graph")
+
+    print("\nFile Search (grep)")
     format_output(file_results, "Files")
 
 

@@ -155,7 +155,7 @@ def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None)
                 neo4j_session.run(
                     """
                     MERGE (a:Assistant {id: $assistant})
-                    ON CREATE SET a.name = $assistant, a.type = 'submind', a.created_at = datetime()
+                    ON CREATE SET a.name = $assistant, a.created_at = datetime()
                     """,
                     assistant=assistant,
                 )
