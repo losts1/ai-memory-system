@@ -227,6 +227,34 @@ See `docs/ARCHITECTURE.md` for detailed design.
 
 ---
 
+## Library (Phase 3)
+
+After `pip install -e .`, the `ai_memory` package is importable:
+
+```python
+from ai_memory import MemoryClient
+
+with MemoryClient() as client:
+    # Semantic search (requires Neo4j + Ollama)
+    results = client.search("transformer attention")
+    results = client.search("inventory management", assistant="Weft")
+
+    # Graph traversal
+    facts = client.traverse("Attention Is All You Need", depth=2)
+
+    # RLM parameter tracing
+    matches = client.trace_parameter("Avellaneda-Stoikov", "gamma")
+
+# Low-level functions are also importable directly:
+from ai_memory.search import search_vector, search_files
+from ai_memory.graph import traverse, trace_parameter, graph_stats
+from ai_memory.state import MemoryStateManager
+```
+
+The library is a thin extraction of the script logic — same behaviour, importable API. Scripts remain as standalone CLI entry points.
+
+---
+
 ## CLI (Phase 6)
 
 After installing the package (`pip install -e .`), you get a single entry point:

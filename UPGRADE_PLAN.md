@@ -113,6 +113,8 @@ Make the system **multi-mind by default** and **library-first**, so new agents (
 
 ### Phase 3: Extract Core Library (Medium–Long Term, 2–4 weeks)
 
+**Status: Complete (2026-06-03)**
+
 **Goal:** Stop shipping a bag of scripts. Create reusable abstractions.
 
 **Proposed structure (illustrative):**

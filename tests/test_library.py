@@ -134,3 +134,35 @@ def test_memory_state_manager_has_expected_methods():
                    'get_pending', 'get_summary', 'load_fact', 'load_next',
                    'cleanup', 'list_sessions', 'close']:
         assert hasattr(MemoryStateManager, method), f"Missing method: {method}"
+
+
+def test_memory_client_importable():
+    from ai_memory import MemoryClient
+    assert callable(MemoryClient)
+
+
+def test_memory_client_instantiates(tmp_path):
+    from ai_memory import MemoryClient
+    client = MemoryClient(workspace=tmp_path)
+    assert client._workspace == tmp_path
+
+
+def test_memory_client_has_expected_methods():
+    from ai_memory import MemoryClient
+    for method in ['search', 'traverse', 'trace_parameter', 'state', 'close']:
+        assert hasattr(MemoryClient, method), f"Missing method: {method}"
+
+
+def test_memory_client_context_manager(tmp_path):
+    from ai_memory import MemoryClient
+    client = MemoryClient(workspace=tmp_path)
+    assert hasattr(client, '__enter__')
+    assert hasattr(client, '__exit__')
+
+
+def test_top_level_imports():
+    import ai_memory
+    assert hasattr(ai_memory, 'MemoryClient')
+    assert hasattr(ai_memory, 'MemoryStateManager')
+    assert hasattr(ai_memory, 'get_driver')
+    assert hasattr(ai_memory, 'get_workspace')
