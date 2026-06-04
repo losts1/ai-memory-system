@@ -18,6 +18,8 @@ This repository contains the **public redistribution package** — the clean boo
 - **Phase 1** (Honest positioning + documentation): Complete
 - **Phase 2** (Multi-tenancy / Submind Foundations): **Complete**
 - **Phase 3** (Core Library Extraction): **Complete**
+- **Phase 4** (RLM Tooling Upstream): **Complete**
+- **Phase 5** (Reduce Domain Coupling): **Complete** — `examples/` directory added with research, software engineering, personal, and (explicitly labeled) trading starters. See [examples/README.md](examples/README.md)
 - **Phase 6** (Unified CLI): **Complete**
 - **Phase 7** (Release & Communication): **Complete**
 
@@ -306,12 +308,14 @@ This is a thin, consistent wrapper over the individual scripts. All existing fla
 
 ### For Your Domain
 
-Edit the templates to reflect your use case:
+The system is deliberately domain-neutral. See the new `examples/` directory for concrete starters:
 
-- **Trading bots:** Market research, strategy notes, knowledge gaps
-- **Research:** Paper tracking, citation management
-- **Personal:** Calendar, contacts, projects
-- **Work:** Team members, processes, tools
+- `examples/research/` — Literature, papers, concept synthesis
+- `examples/software-engineering/` — ADRs, technical decisions, code patterns
+- `examples/personal/` — Goals, reflections, relationships
+- `examples/trading/` — **Explicit real-world example** from the original production deployment (not the default)
+
+Start with the examples that feel closest to your work and adapt from there. The core engine (markdown + Neo4j + RLM tools) works the same regardless of domain.
 
 ### Cron Jobs
 

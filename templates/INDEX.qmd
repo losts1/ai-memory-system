@@ -48,6 +48,8 @@ memory/
 
 ## Recent Sessions
 
+> **Domain examples:** See the `examples/` directory at the root of this repository for starter structures from research, software engineering, personal knowledge, and (explicitly labeled) trading use cases.
+
 | Date | File | Key Events |
 |------|------|------------|
 | [DATE] | sessions/[DATE].qmd | [Brief summary] |
