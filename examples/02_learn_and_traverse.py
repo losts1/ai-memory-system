@@ -53,8 +53,10 @@ def run():
         f.write(SAMPLE_NOTES)
         notes_path = Path(f.name)
 
-    topics = parse_learned_topics(SAMPLE_NOTES, notes_path)
-    notes_path.unlink()
+    try:
+        topics = parse_learned_topics(SAMPLE_NOTES, notes_path)
+    finally:
+        notes_path.unlink(missing_ok=True)
 
     print(f"  Parsed {len(topics)} topics:")
     for t in topics:
@@ -62,7 +64,12 @@ def run():
 
     # Step 2: Sync to Neo4j
     print("\nStep 2: Syncing to Neo4j...")
-    synced = sync_facts(topics, assistant="example-agent")
+    try:
+        synced = sync_facts(topics, assistant="example-agent")
+    except Exception as e:
+        print(f"  Sync failed: {e}")
+        print("  Is Neo4j running?  Try: docker start neo4j  (or see README.md)")
+        return
     print(f"  Synced {synced}/{len(topics)} facts")
     if synced == 0:
         print("  Nothing synced — is Neo4j running?")
@@ -85,7 +92,7 @@ def run():
                 if node.get("teaser"):
                     print(f"      {node['teaser']}")
         else:
-            print(f"  Traversal note: {result.get('error')}")
+            print(f"  Traversal note: {result.get('error') or 'no edges found'}")
             print("  (The graph may need more facts for edges to form — try neo4j_sync.py --full)")
 
     print("\nDemo complete.")
