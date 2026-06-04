@@ -60,6 +60,17 @@ def main() -> None:
     workspace = get_workspace()
     assistant = args.assistant
 
+    # FAISS has no tenant index, so --assistant would be silently dropped.
+    # Refuse the combination rather than return cross-tenant results.
+    if args.use_embeddings and assistant:
+        print(
+            "Error: --assistant is not supported with --use-embeddings "
+            "(FAISS index is not tenant-aware). Drop --use-embeddings to "
+            "use the Neo4j vector index, which filters by assistant.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     if args.files_only:
         results = search_files(args.query, workspace=workspace, max_results=args.max_results)
         format_output(results, "Files")

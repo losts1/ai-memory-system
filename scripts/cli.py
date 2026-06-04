@@ -41,9 +41,10 @@ def _run_script(rel_path: str, args: list[str]) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    print("Initializing AI Memory workspace...")
+    print("AI Memory workspace — bootstrap instructions")
+    print("(This command PRINTS instructions only. Nothing is created on disk.)")
     print()
-    print("Recommended steps (from BOOTSTRAP.md and README):")
+    print("Run these yourself to bootstrap a workspace (see BOOTSTRAP.md, README.md):")
     print("  1. mkdir -p ~/.ai-memory/memory/{core,sessions,inbox,archive,learner-sessions,embeddings,projects}")
     print("  2. cp -r templates/* ~/.ai-memory/")
     print("  3. cp -r templates/core/* ~/.ai-memory/memory/core/")
@@ -52,7 +53,6 @@ def cmd_init(args: argparse.Namespace) -> int:
     print("  6. cp -r docs ~/.ai-memory/")
     print()
     print("Then activate your Neo4j instance and copy .env.neo4j into ~/.ai-memory/")
-    print("See README.md and BOOTSTRAP.md for full details.")
     return 0
 
 
@@ -66,7 +66,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         extra += ["--metadata-only"]
     if args.fields:
         extra += ["--fields", args.fields]
-    if args.max_results:
+    if args.max_results is not None:
         extra += ["--max-results", str(args.max_results)]
 
     return _run_script("hybrid_memory_search.py", [args.query] + extra)
@@ -151,13 +151,15 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     if args.primary:
         extra += ["--primary", args.primary]
     if args.additional:
-        for a in args.additional:
-            extra += ["--additional", a]
+        # neo4j_backfill_assistant.py declares --additional with nargs="*",
+        # so repeated `--additional X --additional Y` would overwrite.
+        # Pass a single flag with all values to preserve every mind.
+        extra += ["--additional", *args.additional]
     if args.dry_run:
         extra.append("--dry-run")
     if args.create_relationships:
         extra.append("--create-relationships")
-    if args.batch_size:
+    if args.batch_size is not None:
         extra += ["--batch-size", str(args.batch_size)]
 
     return _run_script("neo4j_backfill_assistant.py", extra)
@@ -171,7 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # init
-    p = subparsers.add_parser("init", help="Show workspace initialization instructions")
+    p = subparsers.add_parser(
+        "init",
+        help="Print workspace bootstrap instructions (does not create files)",
+    )
     p.set_defaults(func=cmd_init)
 
     # search
@@ -181,7 +186,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--graph", action="store_true", help="Use graph/fulltext search instead of vector")
     p.add_argument("--metadata-only", action="store_true")
     p.add_argument("--fields", help="Comma-separated fields to return")
-    p.add_argument("--max-results", type=int, default=10)
+    # default=None so omission falls through to hybrid_memory_search.py's
+    # own default (5). Avoids the CLI silently changing wrapped-script behavior.
+    p.add_argument("--max-results", type=int, default=None)
     p.set_defaults(func=cmd_search)
 
     # traverse
@@ -232,7 +239,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--additional", action="append")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--create-relationships", action="store_true")
-    p.add_argument("--batch-size", type=int, default=100)
+    # default=None so omission falls through to neo4j_backfill_assistant.py's
+    # own default (500). Avoids the CLI silently quartering the batch size.
+    p.add_argument("--batch-size", type=int, default=None)
     p.set_defaults(func=cmd_backfill)
 
     return parser

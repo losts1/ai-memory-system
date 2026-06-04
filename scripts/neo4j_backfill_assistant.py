@@ -37,6 +37,7 @@ from typing import Dict, List
 
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
+from neo4j.exceptions import ClientError, DatabaseError
 
 # Package conventions (match neo4j_seed.py / hybrid_memory_search.py)
 _WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
@@ -126,18 +127,40 @@ def ensure_assistant_node(driver, assistant_id: str, name: str, assistant_type: 
 
 
 def count_nodes_needing_backfill(driver, label: str) -> int:
-    """Fast count-only (no data rows returned)."""
+    """Count nodes that will actually be tagged by the wet run.
+
+    Mirrors the stage-1 filter (`n.id IS NOT NULL`) so dry-run totals match
+    wet-run totals exactly. Use `count_skipped_null_id` for nodes that lack
+    an `id` and are therefore unreachable by stage-2's id-keyed UNWIND
+    (e.g. v1.2 Facts created only via `ai_memory.learn`).
+    """
     query = f"""
         MATCH (n:{label})
-        WHERE n.assistant IS NULL
+        WHERE n.assistant IS NULL AND n.id IS NOT NULL
         RETURN count(n) AS c
     """
     try:
         with driver.session() as session:
             rec = session.run(query).single()
             return rec["c"] if rec else 0
-    except Exception:
-        # Label does not exist in this graph — zero work
+    except (ClientError, DatabaseError):
+        # Label not present in this graph (pre-5 Neo4j only) or schema error.
+        # Real connection failures (ServiceUnavailable) propagate.
+        return 0
+
+
+def count_skipped_null_id(driver, label: str) -> int:
+    """Count untagged nodes that stage-1 will skip because `n.id` is null."""
+    query = f"""
+        MATCH (n:{label})
+        WHERE n.assistant IS NULL AND n.id IS NULL
+        RETURN count(n) AS c
+    """
+    try:
+        with driver.session() as session:
+            rec = session.run(query).single()
+            return rec["c"] if rec else 0
+    except (ClientError, DatabaseError):
         return 0
 
 
@@ -156,6 +179,14 @@ def backfill_label(
     MATCH ... SET transactions.
     """
     total_to_do = count_nodes_needing_backfill(driver, label)
+    skipped_null_id = count_skipped_null_id(driver, label)
+
+    if skipped_null_id > 0:
+        logger.info(
+            f"  {label}: {skipped_null_id} untagged nodes have no `id` and "
+            f"will be skipped (e.g. v1.2 Facts from ai_memory.learn)"
+        )
+
     if total_to_do == 0:
         logger.info(f"  {label}: already fully tagged (0 nodes need work)")
         return 0
@@ -182,10 +213,12 @@ def backfill_label(
         if not ids:
             break
 
-        # Stage 2: tight UNWIND + SET
-        update_query = """
+        # Stage 2: tight UNWIND + SET. Label-scoped MATCH prevents id
+        # collisions across labels from tagging the wrong node (same fix
+        # the Phase 2 QA round applied to create_q below).
+        update_query = f"""
             UNWIND $ids AS nid
-            MATCH (n) WHERE n.id = nid AND n.assistant IS NULL
+            MATCH (n:{label}) WHERE n.id = nid AND n.assistant IS NULL
             SET n.assistant = $assistant
             RETURN count(n) AS done
         """
