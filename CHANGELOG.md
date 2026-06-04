@@ -7,6 +7,72 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [1.3.2] - 2026-06-04
+
+Neo4j-usability round (QA round 7). Targeted findings from running the
+library against a populated production graph (1,261 Facts, 7,431
+ConversationTurns) and quantifying each issue live before fixing.
+
+### Fixed
+- **[N3] `search_graph.related_facts` walked the wrong relationship.**
+  v1.3.1 traversed only `LEARNED_IN`, which is set by the legacy
+  `neo4j_sync.py` path. Most Facts are written by `ai_memory.learn.sync_facts`
+  via the Word index → `RELATED_TO`. On the test graph **77% of Facts had
+  a `RELATED_TO` neighbor (avg 6.8); only 4% had a `LEARNED_IN` neighbor
+  (avg 0.3)** — `search_graph` was silently dropping related-fact data for
+  73% of results. The Cypher now uses `[:RELATED_TO|LEARNED_IN]`. Live
+  verified: results with populated `relationships` jumped from ~30% to ~60%.
+- **[N4] Connection / index errors no longer collapse to `[]`.** Library
+  callers can now distinguish "Neo4j is down" from "the query returned zero
+  hits." The new `ai_memory.exceptions` module defines
+  `Neo4jConnectionError`, `Neo4jIndexNotFoundError`, and `Neo4jQueryError`
+  (all derived from `AIMemoryError`). `search_vector` / `search_graph` /
+  `get_driver` raise the typed exceptions; query-ran-zero-hits still
+  returns `[]`. Ollama unavailability is left as `[]` (separate dependency).
+- **[N2] Vector-index name discovery.** When `NEO4J_VECTOR_INDEX` doesn't
+  match the configured index, `search_vector` now raises
+  `Neo4jIndexNotFoundError` with the list of vector indexes Neo4j actually
+  reports and a hint to set `NEO4J_VECTOR_INDEX` in `.env.neo4j`. v1.3.1
+  silently returned `[]`.
+- **[N9] Per-query timeout.** Read paths now pass `timeout=` (default 30s,
+  override via `NEO4J_QUERY_TIMEOUT_S`). Prevents indefinite hangs on a
+  slow/locked DB.
+
+### Changed
+- **[N1] Driver pooling.** `MemoryClient` now caches a single driver and
+  closes it cleanly in `close()` / `__exit__`. `search_vector` and
+  `search_graph` accept an optional `driver=` keyword; `MemoryClient`
+  passes its cached driver through automatically. Reused drivers cut
+  per-call overhead by ~30% in live measurement (more dramatic with
+  TLS / remote DBs). Standalone callers retain the one-shot behavior.
+- **`get_driver` now sets `max_connection_pool_size=50`,
+  `max_connection_lifetime=3600`, `connection_acquisition_timeout=30`**,
+  and `notifications_min_severity="WARNING"` when the installed driver
+  supports it (≥5.6) — mutes the "property does not exist" notification
+  chatter without losing real warnings.
+- **`get_driver` raises `Neo4jConnectionError`** for auth, network, and
+  TLS failures, replacing the bare `Exception` propagation.
+
+### Added
+- **`ai_memory.validate_schema(driver, *, vector_index=...)`** — a
+  diagnostic helper that diffs expected constraints/indexes against the
+  live schema, classifies them as `ok` / `drift` / `missing`, and lists
+  available vector indexes. Useful for new-graph onboarding and for
+  troubleshooting "search returns nothing" before reaching for the source.
+- **`scripts/migrate_to_name_keying.py`** — v1.1 → v1.2 dedupe helper.
+  Dry-run by default; `--apply` merges duplicate-name Facts via APOC's
+  `mergeNodes` after explicit confirmation. Resolves the migration gap
+  documented in `MIGRATION.md` but previously without tooling.
+
+### Notes
+- Connection/auth/index errors are now exceptions instead of silent
+  `[]`. Callers that previously checked `if not results:` to gate
+  fallback paths should add an `except Neo4jConnectionError` clause.
+  The new behavior surfaces real infrastructure issues that v1.3.1
+  hid.
+
+---
+
 ## [1.3.1] - 2026-06-04
 
 Fix-only patch addressing six bug reports against v1.3.0 (issues

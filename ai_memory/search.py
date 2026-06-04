@@ -3,12 +3,18 @@ Search functions for the AI Memory System.
 
 Four backends:
   search_vector — Neo4j vector index (semantic similarity via embeddings)
-  search_graph  — Neo4j fulltext index + LEARNED_IN relationship traversal
+  search_graph  — Neo4j fulltext + RELATED_TO/LEARNED_IN graph traversal
   search_files  — grep over markdown memory files
   search_faiss  — local FAISS index (offline fallback, Layer 5)
 
-All functions return a list of result dicts and never raise — errors are
-printed to stderr and an empty list is returned.
+Error semantics (issue #N4):
+  * Query ran, zero hits          → return ``[]`` (unchanged)
+  * Neo4j unreachable / auth fail → raise ``Neo4jConnectionError``
+  * Vector index name not found   → raise ``Neo4jIndexNotFoundError``
+  * Other Cypher errors           → raise ``Neo4jQueryError``
+
+Drivers can be supplied externally via the ``driver`` keyword to enable pooling
+across calls (issue #N1). If absent, the function creates and closes its own.
 """
 import os
 import re
@@ -17,7 +23,39 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from ai_memory._config import get_driver, get_workspace
+from neo4j.exceptions import ClientError
+
+from ai_memory._config import get_driver, get_query_timeout, get_workspace
+from ai_memory.exceptions import (
+    Neo4jConnectionError,
+    Neo4jIndexNotFoundError,
+    Neo4jQueryError,
+)
+
+
+def _list_vector_indexes(driver) -> list:
+    """Return all VECTOR index names. Used to build actionable error messages."""
+    try:
+        with driver.session() as s:
+            return [r["name"] for r in s.run(
+                "SHOW INDEXES YIELD name, type WHERE type = 'VECTOR' RETURN name"
+            )]
+    except Exception:
+        return []
+
+
+def _classify_client_error(driver, e: ClientError, vector_index: Optional[str] = None):
+    """Map a neo4j ClientError to an ai_memory exception class with context.
+
+    The vector-index-missing case (very common when users don't override
+    NEO4J_VECTOR_INDEX) gets a discoverability hint.
+    """
+    msg = str(e)
+    if "no such vector schema index" in msg.lower() or "no such index" in msg.lower():
+        available = _list_vector_indexes(driver) if driver is not None else []
+        return Neo4jIndexNotFoundError(vector_index or "<unknown>",
+                                       kind="vector", available=available)
+    return Neo4jQueryError(msg)
 
 
 def _escape_lucene(query: str) -> str:
@@ -32,76 +70,85 @@ def search_vector(
     workspace=None,
     max_results: int = 5,
     assistant: Optional[str] = None,
+    driver=None,
 ) -> List[dict]:
     """
     Semantic similarity search via Neo4j vector index.
 
     Requires Ollama (nomic-embed-text) and a running Neo4j instance.
-    Returns [] on any error (Ollama unavailable, Neo4j unreachable, etc.).
-    Empty / whitespace-only queries short-circuit to [] without contacting
-    Ollama — nomic-embed-text returns a 0-dim vector for empty input, which
-    mismatches the configured 768-dim Neo4j vector index.
+    Empty / whitespace-only queries return [] without contacting Ollama.
+
+    Pass an existing ``driver`` to reuse it across calls (MemoryClient does
+    this automatically). When omitted, a one-shot driver is created+closed.
+
+    Raises:
+      Neo4jConnectionError    — Neo4j unreachable or auth failed.
+      Neo4jIndexNotFoundError — configured vector index doesn't exist on the DB.
+      Neo4jQueryError         — other Cypher / runtime error.
+    Returns [] only when Ollama is unreachable, the query is empty,
+    or the query ran successfully with zero matches.
     """
     if not query or not query.strip():
         return []
     try:
         import ollama
-
         response = ollama.embeddings(model="nomic-embed-text", prompt=query)
         embedding = response["embedding"]
+    except Exception as e:
+        # Ollama unavailable. Don't promote this to a Neo4jError — it's a
+        # separate dependency. Surface to stderr for ops visibility, return [].
+        print(f"Embedding error (Ollama unreachable?): {e}", file=sys.stderr)
+        return []
 
-        # get_driver loads workspace/.env.neo4j into os.environ; read the
-        # vector-index name AFTER that so the .env.neo4j override applies
-        # on the very first call (not just the second).
-        driver = get_driver(workspace)
-        vector_index = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
-        try:
-            with driver.session() as session:
-                # Facts written by ai_memory.learn.sync_facts store data in
-                # `summary` + `key_points` rather than `content`. Fall back to
-                # `summary` for `content` so downstream teasers/metadata work
-                # uniformly across both writer paths.
-                cypher = """
-                CALL db.index.vector.queryNodes($vector_index, $k, $embedding)
-                YIELD node, score
-                WHERE $assistant IS NULL OR node.assistant = $assistant
-                RETURN node.id AS id, node.name AS name,
-                       coalesce(node.content, node.summary) AS content,
-                       node.summary AS summary,
-                       node.key_points AS key_points,
-                       node.assistant AS assistant, score
-                ORDER BY score DESC
-                LIMIT $k
-                """
+    owns_driver = driver is None
+    if owns_driver:
+        driver = get_driver(workspace)  # raises Neo4jConnectionError on its own
+    vector_index = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
+    try:
+        with driver.session() as session:
+            cypher = """
+            CALL db.index.vector.queryNodes($vector_index, $k, $embedding)
+            YIELD node, score
+            WHERE $assistant IS NULL OR node.assistant = $assistant
+            RETURN node.id AS id, node.name AS name,
+                   coalesce(node.content, node.summary) AS content,
+                   node.summary AS summary,
+                   node.key_points AS key_points,
+                   node.assistant AS assistant, score
+            ORDER BY score DESC
+            LIMIT $k
+            """
+            try:
                 result = session.run(
                     cypher,
                     vector_index=vector_index,
                     k=max_results,
                     embedding=embedding,
                     assistant=assistant,
+                    timeout=get_query_timeout(),
                 )
-                results = []
-                for record in result:
-                    r = {
-                        "source": f"neo4j://Fact/{record['name']}",
-                        "score": round(record["score"], 3),
-                        "name": record["name"],
-                        "content": record["content"][:500] if record["content"] else None,
-                    }
-                    if record.get("summary"):
-                        r["summary"] = record["summary"]
-                    if record.get("key_points"):
-                        r["key_points"] = record["key_points"]
-                    if record.get("assistant"):
-                        r["assistant"] = record["assistant"]
-                    results.append(r)
-        finally:
-            driver.close()
+                rows = list(result)
+            except ClientError as e:
+                raise _classify_client_error(driver, e, vector_index=vector_index) from e
+            results = []
+            for record in rows:
+                r = {
+                    "source": f"neo4j://Fact/{record['name']}",
+                    "score": round(record["score"], 3),
+                    "name": record["name"],
+                    "content": record["content"][:500] if record["content"] else None,
+                }
+                if record.get("summary"):
+                    r["summary"] = record["summary"]
+                if record.get("key_points"):
+                    r["key_points"] = record["key_points"]
+                if record.get("assistant"):
+                    r["assistant"] = record["assistant"]
+                results.append(r)
         return results
-
-    except Exception as e:
-        print(f"Neo4j vector search error: {e}", file=sys.stderr)
-        return []
+    finally:
+        if owns_driver:
+            driver.close()
 
 
 def search_graph(
@@ -110,71 +157,80 @@ def search_graph(
     workspace=None,
     max_results: int = 5,
     assistant: Optional[str] = None,
+    driver=None,
 ) -> List[dict]:
     """
     Fulltext + relationship graph search via Neo4j.
 
-    Uses the 'fact_content' fulltext index created by neo4j_seed.py.
-    Returns [] on any error. Empty / whitespace-only queries short-circuit
-    to [] before attempting Lucene escaping.
+    Uses the 'fact_content' fulltext index created by neo4j_seed.py and walks
+    both RELATED_TO (the modern Word-index path) and LEARNED_IN (the legacy
+    Session path) to compute ``related_facts``. Empty / whitespace-only
+    queries return [] before Lucene escaping.
+
+    Raises the same Neo4j exception hierarchy as ``search_vector``.
     """
     if not query or not query.strip():
         return []
-    try:
-        lucene_query = _escape_lucene(query)
+    lucene_query = _escape_lucene(query)
+
+    owns_driver = driver is None
+    if owns_driver:
         driver = get_driver(workspace)
-        try:
-            with driver.session() as session:
-                # Return summary + key_points alongside name so graph results
-                # carry the same teaser/content fields as vector results
-                # (Facts from ai_memory.learn store data in summary, not content).
-                cypher = """
-                CALL db.index.fulltext.queryNodes('fact_content', $lucene_query)
-                YIELD node, score
-                WHERE $assistant IS NULL OR node.assistant = $assistant
-                OPTIONAL MATCH (node)-[:LEARNED_IN]->(s:Session)<-[:LEARNED_IN]-(related:Fact)
-                WHERE related.id <> node.id
-                  AND ($assistant IS NULL OR related.assistant = $assistant)
-                RETURN node.id AS id, node.name AS name,
-                       coalesce(node.content, node.summary) AS content,
-                       node.summary AS summary,
-                       node.key_points AS key_points,
-                       node.assistant AS assistant,
-                       score, collect(DISTINCT related.name)[0..5] AS related_facts
-                ORDER BY score DESC
-                LIMIT $limit
-                """
+    try:
+        with driver.session() as session:
+            # Issue #N3: walk RELATED_TO (covers ~77% of facts in real graphs)
+            # AND LEARNED_IN (covers the legacy ~4%); UNION via the alternation
+            # pattern. Previously only LEARNED_IN was traversed, dropping
+            # related_facts for 73% of results silently.
+            cypher = """
+            CALL db.index.fulltext.queryNodes('fact_content', $lucene_query)
+            YIELD node, score
+            WHERE $assistant IS NULL OR node.assistant = $assistant
+            OPTIONAL MATCH (node)-[:RELATED_TO|LEARNED_IN]-(related:Fact)
+            WHERE related.name <> node.name
+              AND ($assistant IS NULL OR related.assistant = $assistant)
+            RETURN node.id AS id, node.name AS name,
+                   coalesce(node.content, node.summary) AS content,
+                   node.summary AS summary,
+                   node.key_points AS key_points,
+                   node.assistant AS assistant,
+                   score, collect(DISTINCT related.name)[0..5] AS related_facts
+            ORDER BY score DESC
+            LIMIT $limit
+            """
+            try:
                 result = session.run(
                     cypher,
                     lucene_query=lucene_query,
                     limit=max_results,
                     assistant=assistant,
+                    timeout=get_query_timeout(),
                 )
-                results = []
-                for record in result:
-                    related = record["related_facts"] if record["related_facts"] else []
-                    r = {
-                        "source": f"neo4j://Fact/{record['name']}",
-                        "score": round(record["score"], 3),
-                        "name": record["name"],
-                        "relationships": ", ".join([rn for rn in related if rn]),
-                    }
-                    if record["content"]:
-                        r["content"] = record["content"][:500]
-                    if record.get("summary"):
-                        r["summary"] = record["summary"]
-                    if record.get("key_points"):
-                        r["key_points"] = record["key_points"]
-                    if record.get("assistant"):
-                        r["assistant"] = record["assistant"]
-                    results.append(r)
-        finally:
-            driver.close()
+                rows = list(result)
+            except ClientError as e:
+                raise _classify_client_error(driver, e) from e
+            results = []
+            for record in rows:
+                related = record["related_facts"] if record["related_facts"] else []
+                r = {
+                    "source": f"neo4j://Fact/{record['name']}",
+                    "score": round(record["score"], 3),
+                    "name": record["name"],
+                    "relationships": ", ".join([rn for rn in related if rn]),
+                }
+                if record["content"]:
+                    r["content"] = record["content"][:500]
+                if record.get("summary"):
+                    r["summary"] = record["summary"]
+                if record.get("key_points"):
+                    r["key_points"] = record["key_points"]
+                if record.get("assistant"):
+                    r["assistant"] = record["assistant"]
+                results.append(r)
         return results
-
-    except Exception as e:
-        print(f"Neo4j graph search error: {e}", file=sys.stderr)
-        return []
+    finally:
+        if owns_driver:
+            driver.close()
 
 
 def search_files(

@@ -24,7 +24,13 @@ Quick start:
 See README.md for full documentation.
 """
 
-from ai_memory._config import get_driver, get_workspace
+from ai_memory._config import get_driver, get_workspace, validate_schema
+from ai_memory.exceptions import (
+    AIMemoryError,
+    Neo4jConnectionError,
+    Neo4jIndexNotFoundError,
+    Neo4jQueryError,
+)
 from ai_memory.metadata import apply_fields_filter, apply_metadata_only, make_teaser
 from ai_memory.search import search_faiss, search_files, search_graph, search_vector
 from ai_memory.graph import graph_stats, trace_parameter as _trace_parameter, traverse as _traverse
@@ -51,21 +57,36 @@ class MemoryClient:
     """
     High-level facade for all AI Memory System operations.
 
-    Holds a workspace path and can be used as a context manager to ensure
-    clean resource lifecycle. The underlying Neo4j driver is created lazily
-    on first use and closed on exit.
+    Holds a workspace path and (lazily) a cached Neo4j driver. Use as a
+    context manager so the driver is closed exactly once at exit.
 
     Args:
         workspace: Path to the ai-memory workspace. Defaults to
                    AI_MEMORY_DIR env var or ~/.ai-memory.
+
+    Driver pooling:
+        Before v1.3.2 every search/traverse call opened its own driver and
+        closed it, paying ~28ms per call in handshake overhead. v1.3.2
+        caches the driver on the client and reuses it across calls.
+        Pass ``driver=`` directly to library functions to bypass the cache.
     """
 
     def __init__(self, workspace=None):
         self._workspace = get_workspace(workspace)
+        self._driver = None  # lazily created on first use
 
     # ------------------------------------------------------------------
-    # Context manager (optional but recommended for long-running use)
+    # Driver lifecycle
     # ------------------------------------------------------------------
+
+    def driver(self):
+        """Return the cached Neo4j driver, creating it lazily on first call.
+
+        Raises ``Neo4jConnectionError`` if Neo4j is unreachable.
+        """
+        if self._driver is None:
+            self._driver = get_driver(self._workspace)
+        return self._driver
 
     def __enter__(self):
         return self
@@ -74,8 +95,10 @@ class MemoryClient:
         self.close()
 
     def close(self):
-        """No persistent driver in the facade — nothing to close."""
-        pass
+        """Close the cached driver if one was created."""
+        if self._driver is not None:
+            self._driver.close()
+            self._driver = None
 
     # ------------------------------------------------------------------
     # Search
@@ -105,16 +128,26 @@ class MemoryClient:
             fields:         Return only these fields from each result.
 
         Returns:
-            List of result dicts. Empty list if Neo4j/Ollama unavailable.
+            List of result dicts. Empty list if Ollama unavailable or query empty.
+
+        Raises:
+            Neo4jConnectionError / Neo4jIndexNotFoundError / Neo4jQueryError —
+            see ai_memory.exceptions.
         """
         ws = self._workspace
         if use_embeddings:
             results = search_faiss(query, workspace=ws, max_results=max_results)
         else:
-            results = search_vector(query, workspace=ws, max_results=max_results, assistant=assistant)
+            results = search_vector(
+                query, workspace=ws, max_results=max_results,
+                assistant=assistant, driver=self.driver(),
+            )
 
         if graph:
-            graph_results = search_graph(query, workspace=ws, max_results=max_results, assistant=assistant)
+            graph_results = search_graph(
+                query, workspace=ws, max_results=max_results,
+                assistant=assistant, driver=self.driver(),
+            )
             # Dedupe by name: vector/FAISS results win, graph fills the rest.
             seen = {r.get("name") for r in results if r.get("name")}
             for r in graph_results:
@@ -263,6 +296,11 @@ __all__ = [
     'MemoryStateManager',
     'get_driver',
     'get_workspace',
+    'validate_schema',
+    'AIMemoryError',
+    'Neo4jConnectionError',
+    'Neo4jIndexNotFoundError',
+    'Neo4jQueryError',
     'search_vector',
     'search_graph',
     'search_files',

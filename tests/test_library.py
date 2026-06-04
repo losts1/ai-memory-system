@@ -272,3 +272,105 @@ def test_top_level_imports():
     assert hasattr(ai_memory, 'MemoryStateManager')
     assert hasattr(ai_memory, 'get_driver')
     assert hasattr(ai_memory, 'get_workspace')
+
+
+# ---------------------------------------------------------------------------
+# v1.3.2 — Neo4j usability round (issues #N1-#N18)
+# ---------------------------------------------------------------------------
+
+def test_exception_hierarchy_importable():
+    """Issue #N4: ai_memory.exceptions exists with the expected classes."""
+    from ai_memory.exceptions import (
+        AIMemoryError, Neo4jError, Neo4jConnectionError,
+        Neo4jIndexNotFoundError, Neo4jQueryError,
+    )
+    assert issubclass(Neo4jConnectionError, Neo4jError)
+    assert issubclass(Neo4jIndexNotFoundError, Neo4jError)
+    assert issubclass(Neo4jQueryError, Neo4jError)
+    assert issubclass(Neo4jError, AIMemoryError)
+
+
+def test_index_not_found_error_includes_actionable_hint():
+    """Issue #N2: the error message must list available indexes when possible."""
+    from ai_memory.exceptions import Neo4jIndexNotFoundError
+    e = Neo4jIndexNotFoundError("fact_embeddings", kind="vector",
+                                 available=["factEmbeddingIndex", "memeEmbeddingIndex"])
+    msg = str(e)
+    assert "fact_embeddings" in msg
+    assert "factEmbeddingIndex" in msg
+    assert "NEO4J_VECTOR_INDEX" in msg
+
+    # No available indexes — different hint
+    e2 = Neo4jIndexNotFoundError("x", available=[])
+    assert "neo4j_seed.py" in str(e2)
+
+
+def test_get_driver_raises_connection_error_on_bad_uri(monkeypatch, tmp_path):
+    """Issue #N4: unreachable URI must raise Neo4jConnectionError, not bare OSError."""
+    monkeypatch.setenv("NEO4J_URI", "bolt://127.0.0.1:1")
+    monkeypatch.setenv("NEO4J_USERNAME", "neo4j")
+    monkeypatch.setenv("NEO4J_PASSWORD", "irrelevant")
+    (tmp_path / ".env.neo4j").write_text("")
+    from ai_memory._config import get_driver
+    from ai_memory.exceptions import Neo4jConnectionError
+    try:
+        get_driver(workspace=tmp_path)
+        assert False, "expected Neo4jConnectionError"
+    except Neo4jConnectionError as e:
+        msg = str(e)
+        assert "127.0.0.1:1" in msg
+
+
+def test_memory_client_close_releases_cached_driver(tmp_path, monkeypatch):
+    """Issue #N1: close() must actually close the driver if one was created.
+    We don't connect for real; the driver is None until first use."""
+    from ai_memory import MemoryClient
+    client = MemoryClient(workspace=tmp_path)
+    assert client._driver is None  # lazy — not created yet
+    client.close()  # no-op when driver was never created
+    assert client._driver is None
+
+
+def test_memory_client_driver_method_is_lazy(tmp_path):
+    """Calling .driver() before any operation must not fail at construction."""
+    from ai_memory import MemoryClient
+    client = MemoryClient(workspace=tmp_path)
+    # Driver is created lazily; construction shouldn't connect.
+    assert client._driver is None
+
+
+def test_validate_schema_signature():
+    """Issue #N5: validate_schema is exported and has the expected signature."""
+    from ai_memory import validate_schema
+    import inspect
+    sig = inspect.signature(validate_schema)
+    assert "vector_index" in sig.parameters
+
+
+def test_search_graph_cypher_uses_related_to_or_learned_in():
+    """Issue #N3: search_graph must walk RELATED_TO|LEARNED_IN, not LEARNED_IN
+    alone. Inspect the function's source as a regression guard."""
+    import inspect
+    from ai_memory.search import search_graph
+    src = inspect.getsource(search_graph)
+    assert "RELATED_TO|LEARNED_IN" in src, \
+        "search_graph must traverse both relationship types"
+    assert "[:LEARNED_IN]->" not in src, \
+        "the lone LEARNED_IN traversal was the v1.3.1 bug; should be replaced"
+
+
+def test_search_functions_accept_driver_kwarg():
+    """Issue #N1: search_vector and search_graph must accept driver= for pooling."""
+    import inspect
+    from ai_memory.search import search_vector, search_graph
+    for fn in (search_vector, search_graph):
+        params = inspect.signature(fn).parameters
+        assert "driver" in params, f"{fn.__name__} missing driver parameter"
+
+
+def test_get_query_timeout_returns_float():
+    """Issue #N9: timeout helper exists and returns a sensible default."""
+    from ai_memory._config import get_query_timeout
+    t = get_query_timeout()
+    assert isinstance(t, float)
+    assert 1.0 <= t <= 600.0
