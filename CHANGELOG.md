@@ -7,6 +7,60 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [1.3.0] - 2026-06-04
+
+Frontmatter-aware parsing + search shape fixes. Driven by QA rounds 3–5
+applying the library against a real organic memory corpus (60 YAML-headed
+markdown files) and a populated Neo4j 2026.04 (1183 Facts).
+
+### Added
+- `ai_memory.learn.parse_frontmatter_topic(content, filepath)` — parser
+  for YAML-frontmatter single-topic memory files. Sibling to
+  `parse_learned_topics` (which is daily-note-shaped). The frontmatter
+  `description` field becomes the topic `summary` (curated one-liner);
+  body bullets become `key_points`. Skips fenced code blocks; tolerates a
+  UTF-8 BOM; the numbered-list pattern requires whitespace after the
+  period so `1.2.3 foo` is not mistaken for a list item.
+
+### Changed
+- `ai_memory.search.search_files`:
+  - Replaced the hard-coded 30-file reverse-alphabetic cap with a
+    configurable `max_files: Optional[int] = None` parameter (no cap by
+    default) and an mtime-descending sort. The old behaviour was correct
+    for `YYYY-MM-DD.md` daily notes but silently dropped half of any
+    semantically-named corpus.
+  - `MEMORY.md` is now looked up at both `workspace/MEMORY.md` (project
+    layout) and `workspace/memory/MEMORY.md` (Claude-style layout); first
+    match wins. The daily `*.md` glob skips `MEMORY.md` so it is never
+    reported twice.
+  - The mtime sort key catches `OSError` so a broken symlink or
+    permission-denied file no longer crashes the entire sort.
+- `ai_memory.metadata.make_teaser(summary, *, description=None)` — when
+  a frontmatter `description` is supplied, it wins (descriptions are
+  curated one-liners, no truncation needed). Backward compatible.
+
+### Fixed
+- `ai_memory.search.search_vector`: `NEO4J_VECTOR_INDEX` was read before
+  `get_driver()` triggered `load_dotenv`, so the very first call always
+  used the default `fact_embeddings` index name. The read order is now
+  swapped — vector search works against custom-named indexes (e.g.
+  `factEmbeddingIndex`) on the very first invocation.
+- `ai_memory.metadata.apply_metadata_only`: `search_vector` returns
+  `content=None` when `node.content` is null; `summary or content` then
+  yielded `None` and `len(teaser_src)` raised `TypeError`. Switched to
+  `result.get('summary') or ''` (and same for `content`).
+- `ai_memory.metadata.make_teaser`: a whitespace-only `description`
+  used to override a real summary and return `''`. Now treated as absent.
+
+### Tests
+- 52 → 69. New tests cover frontmatter parsing (BOM, code-fences,
+  version strings, missing name, description fallback, key-point cap),
+  dual `MEMORY.md` lookup, no-cap and explicit-cap search behaviour,
+  `MEMORY.md` dedup, `None` content/summary handling, and
+  whitespace-only descriptions.
+
+---
+
 ## [1.2.1] - 2026-06-04
 
 QA round 2 (ultrathink). CLI surface + multi-tenancy backfill tool.
