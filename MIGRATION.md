@@ -2,6 +2,109 @@
 
 ---
 
+## Upgrading to v1.2.0 (from v1.0.x or v1.1.x)
+
+**One breaking schema change.** Existing CLIs and library imports continue to work,
+but a one-time graph dedupe may be required before the new constraint will apply.
+
+### What changed
+
+`Fact.name` is now the **primary identity** for a Fact node:
+
+| Before (v1.0/1.1) | After (v1.2) |
+|-------------------|--------------|
+| `neo4j_sync.py` MERGEd on `f.id` (sha256 of `file:name`) — same fact in two files → two nodes | `neo4j_sync.py` MERGEs on `f.name` — one node per fact name |
+| `ai_memory.learn` MERGEd on `f.name` — no `f.id` set | `ai_memory.learn` unchanged — still MERGEs on `f.name` |
+| The two paths could create **duplicate Fact nodes** with disjoint property sets | Both paths converge on the same node, properties merge |
+| Schema had unique constraint on `f.id` only | Schema adds unique constraint on `f.name` (existing `f.id` constraint kept) |
+
+`f.id` is still set by `neo4j_sync.py` (preserved via `coalesce` so legacy lookups
+in `neo4j_backfill_assistant.py` keep working). Facts created only by `ai_memory.learn`
+have no `f.id` — Neo4j 5 `IS UNIQUE` constraints ignore nulls, so this is allowed.
+
+### Migration steps
+
+**1. Dedupe existing facts by name (only if upgrading an existing graph).**
+
+The new `fact_name_unique` constraint will fail to install if any duplicate names exist
+(common after running `neo4j_sync.py` on the same facts across multiple session files).
+`neo4j_seed.py` catches this and prints a warning rather than crashing, but the
+constraint will not be active until duplicates are merged.
+
+Check for duplicates:
+
+```cypher
+MATCH (f:Fact)
+WITH f.name AS name, count(*) AS n
+WHERE n > 1
+RETURN name, n
+ORDER BY n DESC LIMIT 20;
+```
+
+Merge them (requires APOC):
+
+```cypher
+MATCH (f:Fact)
+WITH f.name AS name, collect(f) AS dups
+WHERE size(dups) > 1
+CALL apoc.refactor.mergeNodes(dups, {properties: 'discard', mergeRels: true}) YIELD node
+RETURN count(node);
+```
+
+`properties: 'discard'` keeps the first node's properties on collisions (use `'combine'`
+to keep all values as arrays). `mergeRels: true` consolidates duplicate relationships.
+
+**2. Re-run the seed to install the new constraint.**
+
+```bash
+python3 scripts/neo4j_seed.py
+```
+
+**3. Verify.**
+
+```cypher
+SHOW CONSTRAINTS YIELD name WHERE name = 'fact_name_unique' RETURN name;
+```
+
+### Why this matters
+
+Before v1.2, the same conceptual fact could exist as two separate nodes — one created
+by `neo4j_sync.py` (with `id`, `content`, `source`) and one by `ai_memory.learn` (with
+`summary`, `key_points`, `source_file`). Downstream queries returned divergent shapes
+depending on which sync produced the node, and traversal results undercounted
+relationships. The v1.2 schema collapses these into a single node per fact name.
+
+### Library / read changes
+
+`ai_memory/state.py` had several correctness fixes in v1.2:
+
+- `MemoryStateManager.cleanup()` now returns the actual count of deleted sessions
+  (previously returned 0 or 1 due to a Cypher grouping bug).
+- `MemoryStateManager.load_fact()` now MERGEs a `MemoryFact` when called directly
+  without a prior `record_query` — previously it silently dropped the tracking.
+- Read methods (`get_pending`, `get_summary`, `list_sessions`, helpers) no longer
+  call `_ensure_session`, so reading a non-existent session returns empty rather
+  than creating it, and `updated_at` is not bumped on reads (preserving `cleanup`
+  TTL semantics).
+- `MemoryClient.state(session_id=…)` and `MemoryStateManager(session_id=…)` now
+  bind a default session_id. All session-id-taking methods accept `Optional[str]`
+  and fall back to the bound value:
+
+  ```python
+  with client.state("weft:main") as mgr:
+      mgr.init_session()           # uses bound "weft:main"
+      mgr.record_query("gamma", results)
+      pending = mgr.get_pending()
+  ```
+
+  Explicit per-call session_id still overrides the bound default. Existing code
+  passing session_id explicitly to every call continues to work.
+
+- `MemoryClient.search(graph=True)` now dedupes graph results by `name` against
+  the vector/FAISS results (vector wins).
+
+---
+
 ## Upgrading to v1.0.0 (from v0.2.x or v0.3.x)
 
 **No breaking changes to the CLI.** All existing scripts work identically.

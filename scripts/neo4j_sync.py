@@ -193,14 +193,21 @@ def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None)
                     "source": fact["source"],
                     "session_id": relative_path,
                 }
-                fact_set = "SET f.name = $name, f.content = $content, f.source = $source"
+                # Primary identity is f.name (v1.2). coalesce preserves any id
+                # already set by a prior sync, so the legacy id-based lookups
+                # used by backfill_assistant.py continue to work.
+                fact_set = (
+                    "SET f.content = $content, "
+                    "f.source = $source, "
+                    "f.id = coalesce(f.id, $id)"
+                )
                 if assistant:
                     fact_set += ", f.assistant = $assistant"
                     fact_params["assistant"] = assistant
 
                 neo4j_session.run(
                     f"""
-                    MERGE (f:Fact {{id: $id}})
+                    MERGE (f:Fact {{name: $name}})
                     {fact_set}
                     WITH f
                     MATCH (s:Session {{id: $session_id}})
@@ -214,8 +221,8 @@ def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None)
                 embedding = get_embedding(embed_text)
                 if embedding:
                     neo4j_session.run(
-                        "MATCH (f:Fact {id: $id}) SET f.embedding = $embedding",
-                        id=fact_id,
+                        "MATCH (f:Fact {name: $name}) SET f.embedding = $embedding",
+                        name=fact["name"],
                         embedding=embedding,
                     )
                 else:

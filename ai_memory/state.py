@@ -23,17 +23,21 @@ class MemoryStateManager:
     turn, the agent loads only what is relevant and tracks what is already
     in context.
 
-    Usage:
-        mgr = MemoryStateManager()
-        mgr.init_session("weft:main")
-        mgr.record_query("weft:main", "gamma", [{"name": "Gamma-Parameter", "score": 0.9}])
-        pending = mgr.get_pending("weft:main")
+    Bind a session_id at construction to avoid repeating it on every call:
+
+        mgr = MemoryStateManager(session_id="weft:main")
+        mgr.init_session()
+        mgr.record_query("gamma", [{"name": "Gamma-Parameter", "score": 0.9}])
+        pending = mgr.get_pending()
         mgr.close()
+
+    Explicit per-call session_id still overrides the bound default.
     """
 
-    def __init__(self, workspace=None):
+    def __init__(self, workspace=None, session_id: Optional[str] = None):
         self.driver = None
         self.driver = get_driver(workspace)
+        self.session_id = session_id
 
     def close(self):
         if self.driver:
@@ -49,20 +53,28 @@ class MemoryStateManager:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _ensure_session(self, session_id: str) -> None:
-        now = _now()
-        with self.driver.session() as s:
-            s.run(
-                """
-                MERGE (ms:MemoryState {session_id: $session_id})
-                ON CREATE SET ms.created_at = $now,
-                              ms.updated_at = $now,
-                              ms.query_count = 0
-                ON MATCH  SET ms.updated_at = $now
-                """,
-                session_id=session_id,
-                now=now,
+    def _resolve_sid(self, session_id: Optional[str]) -> str:
+        sid = session_id if session_id is not None else self.session_id
+        if sid is None:
+            raise ValueError(
+                "session_id required: bind via MemoryStateManager(session_id=...) "
+                "or MemoryClient.state(session_id=...), or pass per call."
             )
+        return sid
+
+    def _ensure_state_in(self, s, session_id: str, now) -> None:
+        """MERGE MemoryState within an existing session. Idempotent. Bumps updated_at."""
+        s.run(
+            """
+            MERGE (ms:MemoryState {session_id: $session_id})
+            ON CREATE SET ms.created_at = $now,
+                          ms.updated_at = $now,
+                          ms.query_count = 0
+            ON MATCH  SET ms.updated_at = $now
+            """,
+            session_id=session_id,
+            now=now,
+        )
 
     def _create_memory_query(
         self, s, session_id: str, query_id: str, query: str, now, result_count: int, max_score: float
@@ -108,10 +120,12 @@ class MemoryStateManager:
     # Session lifecycle
     # ------------------------------------------------------------------
 
-    def init_session(self, session_id: str) -> Dict[str, Any]:
+    def init_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
         """Create or refresh a MemoryState node for a session (idempotent)."""
-        self._ensure_session(session_id)
+        sid = self._resolve_sid(session_id)
+        now = _now()
         with self.driver.session() as s:
+            self._ensure_state_in(s, sid, now)
             result = s.run(
                 """
                 MATCH (ms:MemoryState {session_id: $session_id})
@@ -119,7 +133,7 @@ class MemoryStateManager:
                        ms.created_at AS created_at,
                        ms.query_count AS query_count
                 """,
-                session_id=session_id,
+                session_id=sid,
             )
             rec = result.single()
             return {
@@ -134,31 +148,32 @@ class MemoryStateManager:
 
     def record_query(
         self,
-        session_id: str,
+        session_id: Optional[str],
         query: str,
         results: List[Dict[str, Any]],
         state: str = "pending",
     ) -> Dict[str, Any]:
         """Record a search query and its results into the session state."""
+        sid = self._resolve_sid(session_id)
         now = _now()
         query_id = str(uuid.uuid4())
         result_count = len(results)
         max_score = max((r.get("score", 0.0) for r in results), default=0.0)
 
-        self._ensure_session(session_id)
         with self.driver.session() as s:
-            self._create_memory_query(s, session_id, query_id, query, now, result_count, max_score)
+            self._ensure_state_in(s, sid, now)
+            self._create_memory_query(s, sid, query_id, query, now, result_count, max_score)
             for r in results:
                 fact_name = r.get("name", "")
                 if not fact_name:
                     continue
                 score = float(r.get("score", 0.0))
                 loaded_at = now if state == "loaded" else None
-                self._link_fact_to_query(s, session_id, query_id, fact_name, score, state, loaded_at)
+                self._link_fact_to_query(s, sid, query_id, fact_name, score, state, loaded_at)
 
         return {
             "query_id": query_id,
-            "session_id": session_id,
+            "session_id": sid,
             "query": query,
             "result_count": result_count,
             "state": state,
@@ -168,11 +183,12 @@ class MemoryStateManager:
     # State updates
     # ------------------------------------------------------------------
 
-    def mark_loaded(self, session_id: str, fact_names: List[str]) -> int:
+    def mark_loaded(self, session_id: Optional[str], fact_names: List[str]) -> int:
         """Mark facts as loaded into context. Returns count updated."""
+        sid = self._resolve_sid(session_id)
         now = _now()
-        self._ensure_session(session_id)
         with self.driver.session() as s:
+            self._ensure_state_in(s, sid, now)
             result = s.run(
                 """
                 MATCH (ms:MemoryState {session_id: $session_id})-[:HAS_FACT]->(mf:MemoryFact)
@@ -180,18 +196,18 @@ class MemoryStateManager:
                 SET mf.state = 'loaded', mf.loaded_at = $now, ms.updated_at = $now
                 RETURN count(mf) AS updated
                 """,
-                session_id=session_id, fact_names=fact_names, now=now,
+                session_id=sid, fact_names=fact_names, now=now,
             )
             rec = result.single()
             return rec["updated"] if rec else 0
 
     # ------------------------------------------------------------------
-    # Queries
+    # Queries (read-only — do not create state, do not bump updated_at)
     # ------------------------------------------------------------------
 
-    def get_pending(self, session_id: str) -> List[Dict[str, Any]]:
+    def get_pending(self, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get facts in 'pending' state (known but not yet in context)."""
-        self._ensure_session(session_id)
+        sid = self._resolve_sid(session_id)
         with self.driver.session() as s:
             result = s.run(
                 """
@@ -200,18 +216,18 @@ class MemoryStateManager:
                 RETURN mf.fact_name AS fact_name, mf.score AS score
                 ORDER BY mf.score DESC
                 """,
-                session_id=session_id,
+                session_id=sid,
             )
             return [{"fact_name": r["fact_name"], "score": r["score"]} for r in result]
 
-    def get_summary(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get full state summary for a session."""
-        self._ensure_session(session_id)
-        state_info = self._get_session_state(session_id)
+    def get_summary(self, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get full state summary for a session, or None if it doesn't exist."""
+        sid = self._resolve_sid(session_id)
+        state_info = self._get_session_state(sid)
         if not state_info:
             return None
-        facts = self._get_facts_for_session(session_id)
-        queries = self._get_recent_queries(session_id, limit=10)
+        facts = self._get_facts_for_session(sid)
+        queries = self._get_recent_queries(sid, limit=10)
         loaded = sum(1 for f in facts if f["state"] == "loaded")
         pending = sum(1 for f in facts if f["state"] == "pending")
         return {
@@ -295,8 +311,15 @@ class MemoryStateManager:
     # Fact loading
     # ------------------------------------------------------------------
 
-    def load_fact(self, session_id: Optional[str], fact_name: str) -> Optional[Dict[str, Any]]:
-        """Return full Fact content, optionally marking it loaded in session state."""
+    def load_fact(
+        self, session_id: Optional[str], fact_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return full Fact content, optionally tracking it as loaded in session state.
+
+        Tracking happens when an explicit session_id is passed, or when this
+        manager was constructed with a bound session_id. To explicitly skip
+        tracking on a bound manager, pass session_id="".
+        """
         with self.driver.session() as s:
             result = s.run(
                 "MATCH (f:Fact {name: $name}) "
@@ -311,18 +334,39 @@ class MemoryStateManager:
                 "summary": rec["summary"],
                 "key_points": rec["key_points"] or [],
             }
-        if session_id:
-            self.mark_loaded(session_id, [fact_name])
+
+        # Resolve sid: explicit arg wins, then bound default. Empty string opts out.
+        sid = session_id if session_id is not None else self.session_id
+        if sid:
+            now = _now()
+            with self.driver.session() as s:
+                self._ensure_state_in(s, sid, now)
+                # MERGE the MemoryFact so direct load_fact() (without prior
+                # record_query) is also tracked. ON MATCH preserves the score
+                # set by an earlier record_query call.
+                s.run(
+                    """
+                    MATCH (ms:MemoryState {session_id: $session_id})
+                    MERGE (mf:MemoryFact {fact_name: $fact_name, session_id: $session_id})
+                    ON CREATE SET mf.state = 'loaded', mf.score = 0.0, mf.loaded_at = $now
+                    ON MATCH  SET mf.state = 'loaded', mf.loaded_at = $now
+                    MERGE (ms)-[:HAS_FACT]->(mf)
+                    """,
+                    session_id=sid, fact_name=fact_name, now=now,
+                )
         return fact
 
-    def load_next(self, session_id: str, count: int = 3) -> List[Dict[str, Any]]:
+    def load_next(
+        self, session_id: Optional[str] = None, count: int = 3
+    ) -> List[Dict[str, Any]]:
         """Load the next N pending facts (highest score first), marking them loaded."""
-        pending = self.get_pending(session_id)[:count]
+        sid = self._resolve_sid(session_id)
+        pending = self.get_pending(sid)[:count]
         if not pending:
             return []
         facts = []
         for p in pending:
-            fact = self.load_fact(session_id, p["fact_name"])
+            fact = self.load_fact(sid, p["fact_name"])
             if fact:
                 facts.append(fact)
         return facts
@@ -341,12 +385,13 @@ class MemoryStateManager:
                 WHERE ms.updated_at < $cutoff
                 OPTIONAL MATCH (ms)-[:HAS_QUERY]->(q:MemoryQuery)
                 OPTIONAL MATCH (ms)-[:HAS_FACT]->(mf:MemoryFact)
-                WITH ms, collect(DISTINCT q) AS queries, collect(DISTINCT mf) AS facts,
-                     count(DISTINCT ms) AS session_count
+                WITH collect(DISTINCT ms) AS sessions,
+                     collect(DISTINCT q)  AS queries,
+                     collect(DISTINCT mf) AS facts
                 FOREACH (q IN queries | DETACH DELETE q)
                 FOREACH (mf IN facts | DETACH DELETE mf)
-                DETACH DELETE ms
-                RETURN session_count
+                FOREACH (ms IN sessions | DETACH DELETE ms)
+                RETURN size(sessions) AS session_count
                 """,
                 cutoff=cutoff,
             )

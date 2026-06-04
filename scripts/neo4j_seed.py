@@ -37,6 +37,10 @@ def create_schema(driver):
 
         constraints = [
             "CREATE CONSTRAINT fact_id_unique IF NOT EXISTS FOR (f:Fact) REQUIRE f.id IS UNIQUE",
+            # Primary identity for Facts is f.name (v1.2). Both neo4j_sync.py and
+            # ai_memory.learn MERGE on name, so this constraint guarantees a single
+            # node per fact regardless of which sync path created it.
+            "CREATE CONSTRAINT fact_name_unique IF NOT EXISTS FOR (f:Fact) REQUIRE f.name IS UNIQUE",
             "CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
             # Phase 2 multi-tenancy: Assistant nodes must have unique stable IDs
             "CREATE CONSTRAINT assistant_id_unique IF NOT EXISTS FOR (a:Assistant) REQUIRE a.id IS UNIQUE",

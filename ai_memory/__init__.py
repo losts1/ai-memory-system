@@ -113,7 +113,14 @@ class MemoryClient:
             results = search_vector(query, workspace=ws, max_results=max_results, assistant=assistant)
 
         if graph:
-            results += search_graph(query, workspace=ws, max_results=max_results, assistant=assistant)
+            graph_results = search_graph(query, workspace=ws, max_results=max_results, assistant=assistant)
+            # Dedupe by name: vector/FAISS results win, graph fills the rest.
+            seen = {r.get("name") for r in results if r.get("name")}
+            for r in graph_results:
+                name = r.get("name")
+                if name and name not in seen:
+                    results.append(r)
+                    seen.add(name)
 
         if metadata_only:
             results = [apply_metadata_only(r) for r in results]
@@ -188,19 +195,22 @@ class MemoryClient:
     # Session state
     # ------------------------------------------------------------------
 
-    def state(self, session_id: str) -> MemoryStateManager:
+    def state(self, session_id: Optional[str] = None) -> MemoryStateManager:
         """
-        Return a MemoryStateManager for the given session.
+        Return a MemoryStateManager, optionally bound to ``session_id``.
+
+        When ``session_id`` is provided, manager methods can omit it; an
+        explicit per-call ``session_id`` still overrides the bound default.
 
         The returned manager holds a Neo4j connection. Caller must call
-        manager.close() when done, or use it as a context manager.
+        ``manager.close()`` when done, or use it as a context manager.
 
         Example:
             with client.state("weft:main") as mgr:
-                mgr.init_session("weft:main")
-                pending = mgr.get_pending("weft:main")
+                mgr.init_session()
+                pending = mgr.get_pending()
         """
-        return MemoryStateManager(workspace=self._workspace)
+        return MemoryStateManager(workspace=self._workspace, session_id=session_id)
 
     # ------------------------------------------------------------------
     # Learn sync
