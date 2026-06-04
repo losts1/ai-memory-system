@@ -136,6 +136,115 @@ def _parse_key_points_and_summary(body: str):
     return key_points, summary
 
 
+# Match frontmatter, tolerating a leading UTF-8 BOM (editors that prepend ﻿).
+_FRONTMATTER_RE = re.compile(r'^﻿?---\s*\n(.*?)\n---\s*\n', re.DOTALL)
+
+
+def _parse_yaml_frontmatter(content: str) -> Optional[dict]:
+    """Parse a simple key:value YAML frontmatter block.
+
+    Only flat string values are supported (no lists, nested maps, or anchors).
+    This intentionally avoids a PyYAML dependency — memory frontmatter in
+    practice uses flat key:value pairs.
+
+    Returns the parsed dict, or None if the file has no frontmatter.
+    """
+    m = _FRONTMATTER_RE.match(content)
+    if not m:
+        return None
+    fm = {}
+    for line in m.group(1).splitlines():
+        line = line.rstrip()
+        if not line or line.lstrip().startswith('#'):
+            continue
+        if ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        fm[key.strip()] = val.strip()
+    return fm
+
+
+def _strip_frontmatter(content: str) -> str:
+    return _FRONTMATTER_RE.sub('', content, count=1)
+
+
+def _extract_bullets(body: str, max_points: int = 10) -> List[str]:
+    """Extract markdown bullets ('- x', '* x', '1. x') as key_points.
+
+    Skips bullets inside fenced code blocks (``` or ~~~). The numbered-list
+    pattern requires whitespace after the period so version strings like
+    `1.2.3 foo` are not mistaken for list items.
+    """
+    bullets = []
+    in_fence = False
+    fence_marker: Optional[str] = None
+    for line in body.splitlines():
+        stripped = line.strip()
+        # Toggle fence on ``` or ~~~ markers; track which one to allow nesting tolerance.
+        if stripped.startswith(('```', '~~~')):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif fence_marker == marker:
+                in_fence = False
+                fence_marker = None
+            continue
+        if in_fence or not stripped:
+            continue
+        if stripped.startswith(('-', '*')) or re.match(r'^\d+\.\s', stripped):
+            point = re.sub(r'^[-*\d.]+\s*', '', stripped).strip()
+            if point:
+                bullets.append(point)
+                if len(bullets) >= max_points:
+                    break
+    return bullets
+
+
+def parse_frontmatter_topic(content: str, filepath: Path) -> List[dict]:
+    """Extract a single topic from a YAML-frontmatter-headed memory file.
+
+    Format::
+
+        ---
+        name: Short title
+        description: One-line summary
+        type: feedback
+        ---
+        Body content (bullets become key_points).
+
+    The frontmatter's ``description`` field is preferred for ``summary``
+    because it's a hand-curated one-liner. If absent, the first paragraph
+    of the body is used (truncated at 500 chars). Bullet lines in the body
+    become ``key_points``.
+
+    Returns a one-element list on success so the return type matches
+    ``parse_learned_topics``. Returns ``[]`` if the file has no frontmatter
+    or no ``name`` field.
+    """
+    fm = _parse_yaml_frontmatter(content)
+    if not fm or 'name' not in fm:
+        return []
+
+    body = _strip_frontmatter(content).strip()
+    name = fm['name']
+    description = fm.get('description', '')
+
+    if description:
+        summary = description
+    else:
+        first_para = body.split('\n\n', 1)[0].strip() if body else ''
+        summary = first_para[:497] + '...' if len(first_para) > 500 else first_para
+
+    return [{
+        'name': name,
+        'summary': summary,
+        'key_points': _extract_bullets(body),
+        'source_file': filepath.name,
+        'created_at': _date_from_filepath(filepath),
+    }]
+
+
 def parse_learned_topics(content: str, filepath: Path) -> List[dict]:
     """Extract learned topics from a memory file.
 

@@ -30,6 +30,7 @@ from ai_memory.search import search_faiss, search_files, search_graph, search_ve
 from ai_memory.graph import graph_stats, trace_parameter as _trace_parameter, traverse as _traverse
 from ai_memory.state import MemoryStateManager
 from ai_memory.learn import (
+    parse_frontmatter_topic,
     parse_learned_topics,
     sync_facts as _sync_facts,
     rebuild_graph as _rebuild_graph,
@@ -272,6 +273,7 @@ __all__ = [
     'apply_metadata_only',
     'apply_fields_filter',
     'make_teaser',
+    'parse_frontmatter_topic',
     'parse_learned_topics',
     'sync_facts',
     'rebuild_graph',

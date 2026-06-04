@@ -45,6 +45,20 @@ def test_metadata_importable():
     assert callable(make_teaser)
 
 
+def test_apply_metadata_only_handles_none_content():
+    """search_vector returns content=None when node.content is null in Neo4j;
+    apply_metadata_only must not crash on that shape."""
+    from ai_memory.metadata import apply_metadata_only
+    result = apply_metadata_only({
+        "name": "Some Fact",
+        "summary": None,
+        "content": None,
+        "score": 0.5,
+    })
+    assert result["name"] == "Some Fact"
+    assert result["teaser"] == ""
+
+
 def test_apply_metadata_only_strips_to_teaser():
     from ai_memory.metadata import apply_metadata_only
     result = apply_metadata_only({
@@ -94,6 +108,62 @@ def test_search_files_missing_workspace(tmp_path):
     result = search_files("anything", workspace=tmp_path)
     assert isinstance(result, list)
     assert result == []
+
+
+def test_search_files_finds_memory_md_at_workspace_root(tmp_path):
+    """search_files reads MEMORY.md at the workspace root (score 5.0)."""
+    from ai_memory.search import search_files
+    (tmp_path / "MEMORY.md").write_text("the-unique-token lives here\n")
+    result = search_files("the-unique-token", workspace=tmp_path)
+    assert any(r.get("score") == 5.0 and "MEMORY.md" in r["source"] for r in result)
+
+
+def test_search_files_finds_memory_md_inside_memory_dir(tmp_path):
+    """search_files also looks at workspace/memory/MEMORY.md (Claude-style layout)."""
+    from ai_memory.search import search_files
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "MEMORY.md").write_text("inside-token here\n")
+    result = search_files("inside-token", workspace=tmp_path)
+    assert any(r.get("score") == 5.0 and "MEMORY.md" in r["source"] for r in result)
+
+
+def test_search_files_max_files_none_searches_everything(tmp_path):
+    """With max_files=None all memory/*.md files are searched (no 30-cap)."""
+    from ai_memory.search import search_files
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+    # 35 files; the old hard-cap would have skipped 5 of them.
+    for i in range(35):
+        (memdir / f"{i:02d}_note.md").write_text(f"note {i} marker-token-{i}\n")
+    result = search_files("marker-token", workspace=tmp_path, max_results=100)
+    # Without the cap we should find all 35 (max_results=100 is the only limit).
+    assert len(result) == 35
+
+
+def test_search_files_does_not_double_count_memory_md(tmp_path):
+    """When MEMORY.md lives inside memory/, it's searched once (score 5.0),
+    not also re-included via the *.md glob at score 3.0."""
+    from ai_memory.search import search_files
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+    (memdir / "MEMORY.md").write_text("dup-token here\n")
+    (memdir / "other.md").write_text("also dup-token here\n")
+    result = search_files("dup-token", workspace=tmp_path, max_results=100)
+    sources = [r["source"] for r in result]
+    memory_md_hits = [s for s in sources if s.endswith("MEMORY.md")]
+    assert len(memory_md_hits) == 1
+
+
+def test_search_files_max_files_caps_the_search(tmp_path):
+    """Explicit max_files=N limits how many files are scanned."""
+    from ai_memory.search import search_files
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+    for i in range(20):
+        (memdir / f"{i:02d}_note.md").write_text(f"marker-token-{i}\n")
+    result = search_files("marker-token", workspace=tmp_path,
+                          max_results=100, max_files=5)
+    assert len(result) == 5
 
 
 def test_search_faiss_missing_index(tmp_path):

@@ -45,8 +45,11 @@ def search_vector(
         response = ollama.embeddings(model="nomic-embed-text", prompt=query)
         embedding = response["embedding"]
 
-        vector_index = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
+        # get_driver loads workspace/.env.neo4j into os.environ; read the
+        # vector-index name AFTER that so the .env.neo4j override applies
+        # on the very first call (not just the second).
         driver = get_driver(workspace)
+        vector_index = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
         try:
             with driver.session() as session:
                 cypher = """
@@ -148,11 +151,25 @@ def search_files(
     *,
     workspace=None,
     max_results: int = 5,
+    max_files: Optional[int] = None,
 ) -> List[dict]:
     """
     Search memory files via grep (fixed-string, case-insensitive).
 
-    Searches MEMORY.md first (score 5.0), then daily *.md files (score 3.0).
+    Searches MEMORY.md first (score 5.0), then *.md files in ``memory/``
+    (score 3.0), sorted by mtime descending so the most recently touched
+    files are searched first.
+
+    ``max_files`` caps how many *.md files are scanned (None = no cap).
+    Useful when the memory dir is small and you want full coverage; the
+    previous behaviour was a hard 30-file cap reverse-alphabetic, which
+    silently missed half of any semantically-named corpus.
+
+    ``MEMORY.md`` is looked up first at ``workspace/MEMORY.md`` (the
+    project-redistribution convention) and then at
+    ``workspace/memory/MEMORY.md`` (the Claude-style index inside the
+    memory dir). First match wins.
+
     Returns [] if no matches or memory directory doesn't exist.
     """
     ws = get_workspace(workspace)
@@ -160,22 +177,39 @@ def search_files(
     results = []
 
     try:
-        memory_file = ws / "MEMORY.md"
-        if memory_file.exists():
-            proc = subprocess.run(
-                ["grep", "-F", "-i", "-C", "2", "--", query, str(memory_file)],
-                capture_output=True,
-                text=True,
-            )
-            if proc.returncode == 0:
-                results.append({
-                    "source": str(memory_file),
-                    "score": 5.0,
-                    "content": proc.stdout[:500],
-                })
+        for memory_file in (ws / "MEMORY.md", memory_dir / "MEMORY.md"):
+            if memory_file.exists():
+                proc = subprocess.run(
+                    ["grep", "-F", "-i", "-C", "2", "--", query, str(memory_file)],
+                    capture_output=True,
+                    text=True,
+                )
+                if proc.returncode == 0:
+                    results.append({
+                        "source": str(memory_file),
+                        "score": 5.0,
+                        "content": proc.stdout[:500],
+                    })
+                break
 
         if memory_dir.exists():
-            daily_files = sorted(memory_dir.glob("*.md"), reverse=True)[:30]
+            # Sort by mtime descending — works for both YYYY-MM-DD daily notes
+            # (newest first) and semantically-named files (recently touched first).
+            # Skip MEMORY.md — it was already searched above at score 5.0.
+            def _safe_mtime(f: Path) -> float:
+                # stat() can raise on broken symlinks or permission issues;
+                # treat unreachable files as oldest rather than crash the sort.
+                try:
+                    return f.stat().st_mtime
+                except OSError:
+                    return 0.0
+            daily_files = sorted(
+                (f for f in memory_dir.glob("*.md") if f.name != "MEMORY.md"),
+                key=_safe_mtime,
+                reverse=True,
+            )
+            if max_files is not None:
+                daily_files = daily_files[:max_files]
             for f in daily_files:
                 proc = subprocess.run(
                     ["grep", "-F", "-i", "-C", "2", "--", query, str(f)],

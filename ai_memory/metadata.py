@@ -23,12 +23,12 @@ def apply_metadata_only(result: Dict[str, Any]) -> Dict[str, Any]:
     to decide whether it wants the full fact.
     """
     name = result.get('name', result.get('id', ''))
-    summary = result.get('summary', '')
-    content = result.get('content', '')
+    summary = result.get('summary') or ''
+    content = result.get('content') or ''
     teaser_src = summary or content
-    teaser = teaser_src[:150] if teaser_src else ''
+    teaser = teaser_src[:150]
     if len(teaser_src) > 150:
-        teaser = ' '.join(teaser[:150].split()[:-1]) + '...'
+        teaser = ' '.join(teaser.split()[:-1]) + '...'
 
     score = result.get('rrf_score', result.get('score', 0))
 
@@ -49,8 +49,15 @@ def apply_fields_filter(result: Dict[str, Any], fields: List[str]) -> Dict[str, 
     return {f: result.get(f) for f in fields if f in result}
 
 
-def make_teaser(summary: str) -> str:
-    """Create a short teaser from a summary."""
+def make_teaser(summary: str, *, description: Optional[str] = None) -> str:
+    """Create a short teaser.
+
+    If ``description`` is provided (e.g. from YAML frontmatter), it wins:
+    descriptions are already curated one-liners and don't need truncation.
+    Falls back to the existing ``summary[:150]`` behaviour otherwise.
+    """
+    if description and description.strip():
+        return description.strip()
     if not summary:
         return ''
     teaser = summary[:150]
