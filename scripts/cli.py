@@ -125,42 +125,57 @@ def cmd_learn_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_state(args: argparse.Namespace) -> int:
-    # memory_state.py uses positional subcommands (init, pending, summary,
-    # record-query, mark-loaded, load-fact, cleanup, list-sessions), so the
-    # action MUST come before --session and other flags. The CLI exposes the
-    # actions as --foo flags for ergonomics and re-shapes here.
-    action_map = [
-        ("init",          "init"),
-        ("pending",       "pending"),
-        ("summary",       "summary"),
-        ("record_query",  "record-query"),
-        ("mark_loaded",   "mark-loaded"),
-        ("load_fact",     "load-fact"),
-        ("cleanup",       "cleanup"),
+    # memory_state.py uses positional subcommands so the action must come
+    # first in argv. The CLI exposes actions as boolean flags and per-action
+    # extras as named flags, then re-shapes argv here. Each spec entry is:
+    #   (cli_attr, script_subcommand, [(cli_attr_for_extra, --script-flag), ...])
+    STATE_ACTIONS = [
+        ("init",          "init",          [("session",        "--session")]),
+        ("pending",       "pending",       [("session",        "--session")]),
+        ("summary",       "summary",       [("session",        "--session")]),
+        ("record_query",  "record-query",  [("session",        "--session"),
+                                             ("query",          "--query"),
+                                             ("results",        "--results"),
+                                             ("scores",         "--scores"),
+                                             ("state_value",    "--state")]),
+        ("mark_loaded",   "mark-loaded",   [("session",        "--session"),
+                                             ("facts",          "--facts")]),
+        ("load_fact",     "load-fact",     [("session",        "--session"),
+                                             ("fact",           "--fact")]),
+        ("load_next",     "load-next",     [("session",        "--session"),
+                                             ("count",          "--count")]),
+        ("cleanup",       "cleanup",       [("max_age_hours",  "--max-age-hours")]),
+        ("list_sessions", "list-sessions", []),
     ]
-    chosen = [name for attr, name in action_map if getattr(args, attr, False)]
+    chosen = [(attr, sub, fwd) for attr, sub, fwd in STATE_ACTIONS
+              if getattr(args, attr, False)]
     if len(chosen) > 1:
-        print(
-            f"Error: pick exactly one action; got {', '.join('--' + c for c in chosen)}",
-            file=sys.stderr,
-        )
+        names = ", ".join("--" + a[0].replace("_", "-") for a in chosen)
+        print(f"Error: pick exactly one action; got {names}", file=sys.stderr)
         return 2
     if not chosen:
+        all_flags = ", ".join("--" + attr.replace("_", "-") for attr, _, _ in STATE_ACTIONS)
         print(
-            "Error: state requires one action flag — one of "
-            "--init, --pending, --summary, --record-query, --mark-loaded, "
-            "--load-fact, --cleanup",
+            f"Error: state requires one action flag — one of {all_flags}",
             file=sys.stderr,
         )
         return 2
 
-    extra = [chosen[0]]
-    if args.session:
-        extra += ["--session", args.session]
-    # Action-specific extras (e.g. --fact, --facts, --query, --results,
-    # --scores, --state, --max-age-hours, --count) come through REMAINDER.
+    attr, subcommand, fwd_map = chosen[0]
+    extra = [subcommand]
+    for cli_attr, script_flag in fwd_map:
+        val = getattr(args, cli_attr, None)
+        if val is not None:
+            extra += [script_flag, str(val)]
+    # Anything truly unmodeled gets passed through. We strip a single leading
+    # `--` because users may add it as an argparse-terminator habit; the
+    # underlying memory_state.py subparsers would interpret it as the
+    # option-terminator and treat the rest as positionals.
     if args.args:
-        extra += args.args
+        passthrough = list(args.args)
+        if passthrough and passthrough[0] == "--":
+            passthrough = passthrough[1:]
+        extra += passthrough
 
     return _run_script("rlm/memory_state.py", extra)
 
@@ -247,13 +262,28 @@ def build_parser() -> argparse.ArgumentParser:
     # state (memory_state)
     p = subparsers.add_parser("state", help="Per-session memory state (lazy loading) - wrapper for memory_state.py")
     p.add_argument("--session", required=False)
+    # Actions — one of these must be set (mutually exclusive at the cmd_state layer).
     p.add_argument("--init", action="store_true")
     p.add_argument("--pending", action="store_true")
     p.add_argument("--summary", action="store_true")
     p.add_argument("--record-query", action="store_true")
     p.add_argument("--mark-loaded", action="store_true")
     p.add_argument("--load-fact", action="store_true")
+    p.add_argument("--load-next", action="store_true")
     p.add_argument("--cleanup", action="store_true")
+    p.add_argument("--list-sessions", action="store_true")
+    # Per-action extras (issue #41): declared on the state subparser so they're
+    # parseable by argparse and forwardable. The action-spec table in cmd_state
+    # controls which flags are forwarded for each action.
+    p.add_argument("--query")
+    p.add_argument("--results")
+    p.add_argument("--scores")
+    p.add_argument("--state", dest="state_value", choices=["pending", "loaded"],
+                   help="record-query: initial state for returned facts")
+    p.add_argument("--facts")
+    p.add_argument("--fact")
+    p.add_argument("--max-age-hours", type=int, dest="max_age_hours")
+    p.add_argument("--count", type=int)
     p.add_argument("args", nargs=argparse.REMAINDER, help="Additional arguments passed through")
     p.set_defaults(func=cmd_state)
 

@@ -187,6 +187,10 @@ def search_files(
     """
     Search memory files via grep (fixed-string, case-insensitive).
 
+    Empty / whitespace-only queries short-circuit to [] — ``grep -F ""``
+    matches every line of every file, so unguarded empty queries can flood
+    output (issue #40, sibling to #39's guard on the Neo4j/FAISS backends).
+
     Searches MEMORY.md first (score 5.0), then *.md files in ``memory/``
     (score 3.0), sorted by mtime descending so the most recently touched
     files are searched first.
@@ -203,6 +207,8 @@ def search_files(
 
     Returns [] if no matches or memory directory doesn't exist.
     """
+    if not query or not query.strip():
+        return []
     ws = get_workspace(workspace)
     memory_dir = ws / "memory"
     results = []

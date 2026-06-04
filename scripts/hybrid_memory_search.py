@@ -22,9 +22,30 @@ from ai_memory.search import search_faiss, search_files, search_graph, search_ve
 from ai_memory.metadata import apply_fields_filter, apply_metadata_only
 
 
+_MEANINGFUL_FIELDS = frozenset({
+    "source", "name", "teaser", "summary", "content",
+    "relationships", "key_points",
+})
+
+
+def _has_meaningful_fields(results: list) -> bool:
+    """True iff at least one result carries a field worth displaying.
+
+    `score` alone is not enough — it has no context. Used by both
+    format_output (body) and main (section header) to gate the
+    --fields-stripped case (issue #43).
+    """
+    return any(set(r.keys()) & _MEANINGFUL_FIELDS for r in results)
+
+
 def format_output(results: list, query_type: str) -> None:
     if not results:
         print(f"No results found ({query_type})")
+        return
+    # Issue #43: if `--fields` stripped every meaningful display field, the
+    # section would render as just a separator + a bare Score line. Suppress
+    # the body silently; main() also suppresses the section header.
+    if not _has_meaningful_fields(results):
         return
     print("=" * 60)
     for r in results:
@@ -116,15 +137,23 @@ def main() -> None:
         graph_results = [apply_fields_filter(r, requested) for r in graph_results]
         file_results = [apply_fields_filter(r, requested) for r in file_results]
 
-    print(f"Semantic result ({sem_label})")
-    format_output(semantic_results, sem_label)
+    def _emit_section(header: str, results: list, query_type: str) -> None:
+        # Issue #43: if --fields stripped every meaningful display field,
+        # don't render the section header either (the body suppression in
+        # format_output would otherwise leave an orphan header).
+        if results and not _has_meaningful_fields(results):
+            return
+        print(header)
+        format_output(results, query_type)
 
+    _emit_section(f"Semantic result ({sem_label})", semantic_results, sem_label)
     if args.graph:
-        print(f"\nGraph Relationships (Neo4j){' [' + assistant + ']' if assistant else ''}")
-        format_output(graph_results, "Neo4j Graph")
-
-    print("\nFile Search (grep)")
-    format_output(file_results, "Files")
+        graph_header = (
+            f"\nGraph Relationships (Neo4j)"
+            f"{' [' + assistant + ']' if assistant else ''}"
+        )
+        _emit_section(graph_header, graph_results, "Neo4j Graph")
+    _emit_section("\nFile Search (grep)", file_results, "Files")
 
 
 if __name__ == "__main__":

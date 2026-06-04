@@ -170,3 +170,101 @@ def test_format_output_handles_missing_source():
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
     import hybrid_memory_search as hms
     hms.format_output([{"name": "X", "score": 0.5}], "FAISS")
+
+
+def test_format_output_suppresses_score_only_section(capsys):
+    """Issue #43: when --fields strips every meaningful display field and
+    only 'score' survives, the section should render nothing — not an
+    orphan separator + Score line."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    import hybrid_memory_search as hms
+    hms.format_output([{"score": 3.0}, {"score": 2.5}], "Files")
+    captured = capsys.readouterr()
+    # No separator should have been printed; no Score line either.
+    assert "=" * 60 not in captured.out
+    assert "Score:" not in captured.out
+    # But a result with at least one meaningful field still renders.
+    hms.format_output([{"score": 3.0, "name": "X"}], "Files")
+    captured = capsys.readouterr()
+    assert "Name: X" in captured.out
+
+
+def test_cli_state_advertises_all_nine_subcommands():
+    """Issue #42: --list-sessions and --load-next must be discoverable."""
+    result = run_cli(["state", "--help"])
+    assert result.returncode == 0
+    for flag in ("--init", "--pending", "--summary",
+                 "--record-query", "--mark-loaded",
+                 "--load-fact", "--load-next",
+                 "--cleanup", "--list-sessions"):
+        assert flag in result.stdout, f"--help missing {flag}"
+
+
+def test_cli_state_forwards_max_age_hours_to_cleanup(monkeypatch):
+    """Issue #41: action-specific flags must reach memory_state.py.
+    Before the fix: argparse rejected --max-age-hours as unrecognized."""
+    cli, calls = _spy_subprocess_call(monkeypatch)
+    parser = cli.build_parser()
+    args = parser.parse_args(["state", "--cleanup", "--max-age-hours", "9999"])
+    args.func(args)
+    argv = calls[0][2:]
+    assert argv == ["cleanup", "--max-age-hours", "9999"]
+
+
+def test_cli_state_forwards_fact_to_load_fact(monkeypatch):
+    """Issue #41 — load-fact takes --fact."""
+    cli, calls = _spy_subprocess_call(monkeypatch)
+    parser = cli.build_parser()
+    args = parser.parse_args(["state", "--load-fact",
+                              "--session", "weft:main",
+                              "--fact", "Circuit Breaker Pattern"])
+    args.func(args)
+    argv = calls[0][2:]
+    assert argv[0] == "load-fact"
+    # both --session and --fact must reach the script
+    assert "--session" in argv
+    assert "--fact" in argv
+    assert argv[argv.index("--fact") + 1] == "Circuit Breaker Pattern"
+
+
+def test_cli_state_list_sessions_takes_no_extras(monkeypatch):
+    """Issue #42: list-sessions emits as a bare subcommand."""
+    cli, calls = _spy_subprocess_call(monkeypatch)
+    parser = cli.build_parser()
+    args = parser.parse_args(["state", "--list-sessions"])
+    args.func(args)
+    argv = calls[0][2:]
+    assert argv == ["list-sessions"]
+
+
+def test_cli_state_record_query_forwards_all_extras(monkeypatch):
+    """Issue #41: record-query needs --query, --results, --scores, --state."""
+    cli, calls = _spy_subprocess_call(monkeypatch)
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "state", "--record-query",
+        "--session", "weft:main",
+        "--query", "trailing stop",
+        "--results", "A,B",
+        "--scores", "0.9,0.8",
+        "--state", "pending",
+    ])
+    args.func(args)
+    argv = calls[0][2:]
+    assert argv[0] == "record-query"
+    for needle in ("--session", "--query", "--results", "--scores", "--state"):
+        assert needle in argv, f"missing {needle}"
+
+
+def test_cli_state_strips_leading_double_dash_passthrough(monkeypatch):
+    """Issue #41 workaround behaviour: users who add `--` before passthrough
+    args (a common argparse-terminator habit) must not break the script."""
+    cli, calls = _spy_subprocess_call(monkeypatch)
+    parser = cli.build_parser()
+    args = parser.parse_args(["state", "--cleanup", "--", "--max-age-hours", "9999"])
+    args.func(args)
+    argv = calls[0][2:]
+    # The `--` should be stripped before forwarding so memory_state.py
+    # doesn't treat the rest as positionals.
+    assert "--" not in argv
+    assert "--max-age-hours" in argv

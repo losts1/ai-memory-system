@@ -123,6 +123,21 @@ def test_search_faiss_empty_query_returns_empty(tmp_path):
     assert search_faiss("", workspace=tmp_path) == []
 
 
+def test_search_files_empty_query_returns_empty(tmp_path):
+    """Issue #40: search_files was missing the empty-query guard that #39
+    added to the Neo4j / FAISS backends. grep -F "" matches every line."""
+    from ai_memory.search import search_files
+    memdir = tmp_path / "memory"
+    memdir.mkdir()
+    for i in range(5):
+        (memdir / f"{i}_note.md").write_text(f"line in file {i}\n")
+    assert search_files("",     workspace=tmp_path, max_results=100) == []
+    assert search_files("   \t", workspace=tmp_path, max_results=100) == []
+    # And a non-empty query still works
+    r = search_files("file", workspace=tmp_path, max_results=100)
+    assert len(r) == 5
+
+
 def test_search_files_missing_workspace(tmp_path):
     """search_files on a workspace with no memory dir returns []."""
     from ai_memory.search import search_files
