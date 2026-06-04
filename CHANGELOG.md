@@ -7,6 +7,47 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [1.2.1] - 2026-06-04
+
+QA round 2 (ultrathink). CLI surface + multi-tenancy backfill tool.
+Fix-only patch — no schema changes since v1.2.0.
+
+### Fixed
+- `scripts/cli.py`: `ai-memory backfill --additional A --additional B`
+  silently dropped all but the last value (the wrapped script declares
+  `--additional` with `nargs="*"`, so repeated flags overwrote). The CLI
+  now flattens to a single `--additional A B`, preserving every mind.
+- `scripts/neo4j_backfill_assistant.py`: `backfill_label` stage-2 update
+  used an unlabeled `MATCH (n)`, so a non-Fact node sharing an `id` with
+  a Fact and lacking the `assistant` property could be tagged with the
+  wrong assistant. Now scoped to `MATCH (n:{label})`, closing the same
+  bug pattern that the Phase 2 QA round fixed in `create_q`.
+- `scripts/hybrid_memory_search.py`: `--use-embeddings --assistant <X>`
+  silently dropped the tenant filter (FAISS has no `assistant` parameter).
+  Now exits with code 2 rather than returning cross-tenant results.
+- `scripts/cli.py`: `--max-results` (default 10) and `--batch-size`
+  (default 100) silently overrode the wrapped scripts' own defaults
+  (5 and 500 respectively) because of `if args.X:` truthy pass-through.
+  Defaults are now `None` with `is not None` checks; omitting the flag
+  falls through to the wrapped script's default.
+- `scripts/neo4j_backfill_assistant.py`: dry-run reported `total_to_do`
+  using a count that didn't apply the wet-run's `n.id IS NOT NULL`
+  filter, so dry-runs inflated the projected count. Both counts now
+  match. New `count_skipped_null_id` helper logs the cohort of untagged
+  nodes with `null` ids (e.g. v1.2 Facts created via `ai_memory.learn`)
+  so users see what backfill cannot reach.
+- `scripts/neo4j_backfill_assistant.py:count_nodes_needing_backfill`
+  caught bare `Exception` and returned 0, silently masking
+  `ServiceUnavailable` and similar real connection failures as "label
+  not present". Narrowed to `(ClientError, DatabaseError)`.
+
+### Changed
+- `scripts/cli.py`: `ai-memory init` is now clearly labeled in both its
+  output ("INSTRUCTIONS ONLY — Nothing is created on disk") and its
+  subparser help text. The command still only prints; behavior unchanged.
+
+---
+
 ## [1.2.0] - 2026-06-04
 
 QA round (ultrathink). Unifies the two Fact-sync paths under a single
