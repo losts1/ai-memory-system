@@ -7,6 +7,54 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [1.3.1] - 2026-06-04
+
+Fix-only patch addressing six bug reports against v1.3.0 (issues
+[#34](https://github.com/losts1/ai-memory-system/issues/34)–[#39](https://github.com/losts1/ai-memory-system/issues/39)),
+all reproducible on a populated Neo4j 2026.04 graph (1,261 Facts).
+Live-verified end-to-end. Tests: 69 → 78.
+
+### Fixed
+- **#37 / #38** — `search_vector` and `search_graph` now return
+  `content`, `summary`, and `key_points` from Fact nodes. v1.3.0 returned
+  only `node.content`, but Facts written by `ai_memory.learn.sync_facts`
+  store data in `summary` + `key_points` and leave `content` NULL. In a
+  representative production graph **1,181 / 1,261 Facts (93.7%)** had
+  `content=NULL` — vector and graph search returned empty teasers for
+  almost everything. The Cypher now uses `coalesce(node.content, node.summary)`
+  for `content` and additionally returns `summary` and `key_points`; the
+  result builders emit them when present.
+- **#39** — Empty / whitespace-only queries to `search_vector`,
+  `search_graph`, and `search_faiss` short-circuit to `[]` before
+  contacting Ollama or Neo4j. `ollama.embeddings(prompt="")` returns a
+  0-dim vector, which `db.index.vector.queryNodes` rejects with a
+  dimension-mismatch error against the 768-dim index.
+- **#35** — `scripts/hybrid_memory_search.py:format_output` used `r['source']`
+  unconditionally and crashed with `KeyError: 'source'` when `--fields`
+  stripped the field. All field accesses now use `.get()` with truthiness
+  guards. The formatter additionally surfaces the new `summary` and
+  `key_points` fields.
+- **#34** — `ai-memory search` exposes `--files-only` and
+  `--use-embeddings` flags, forwarded to `hybrid_memory_search.py`.
+  The round-2 guard rejecting `--use-embeddings --assistant <X>` still
+  fires for the incompatible combination.
+- **#36** — `ai-memory state` previously emitted `--session X --init`,
+  which `memory_state.py` rejected because the script uses positional
+  subcommands. `cmd_state` now maps the boolean action flags to
+  subcommand names (`init`, `pending`, `summary`, `record-query`,
+  `mark-loaded`, `load-fact`, `cleanup`) and emits them positionally
+  before `--session`. Zero or two-plus action flags produce explicit
+  usage errors (exit 2).
+
+### Tests
+- 9 new tests: empty-query guards for all three search backends,
+  `cmd_search` --help advertises the two new flags, `cmd_state`
+  action-rewriting + no-action + double-action paths, `cmd_backfill`
+  multi-mind flattening (round-2 regression cover), and
+  `format_output` tolerates a missing `source` field.
+
+---
+
 ## [1.3.0] - 2026-06-04
 
 Frontmatter-aware parsing + search shape fixes. Driven by QA rounds 3–5
