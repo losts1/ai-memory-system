@@ -147,6 +147,10 @@ ai-memory-core/
 
 ### Phase 4: Upstream the RLM Features (Parallel with Phase 2–3)
 
+**Status: Complete (2026-06-03)**
+
+All five upstreaming items are done: `neo4j_traverse.py`, `memory_state.py`, lazy-loading/metadata logic, `neo4j_learn_sync.py` patterns (extracted to `ai_memory/learn.py`), and the RLM pipeline philosophy (documented in `docs/RLM.md` Library API section + `examples/`).
+
 **Goal:** Make the actually interesting capabilities available to others.
 
 High-value pieces to consider upstreaming (in rough priority):
