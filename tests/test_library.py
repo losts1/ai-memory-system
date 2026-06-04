@@ -102,6 +102,27 @@ def test_search_importable():
     assert callable(search_faiss)
 
 
+def test_search_vector_empty_query_returns_empty_without_contacting_ollama():
+    """Issue #39: nomic-embed-text returns a 0-dim vector for empty input,
+    which mismatches the 768-dim Neo4j vector index. Short-circuit instead."""
+    from ai_memory.search import search_vector
+    assert search_vector("") == []
+    assert search_vector("   \n\t  ") == []
+
+
+def test_search_graph_empty_query_returns_empty():
+    """Issue #39: empty queries short-circuit before Lucene escape."""
+    from ai_memory.search import search_graph
+    assert search_graph("") == []
+    assert search_graph("\t") == []
+
+
+def test_search_faiss_empty_query_returns_empty(tmp_path):
+    """Issue #39: empty queries don't reach FAISS embedding."""
+    from ai_memory.search import search_faiss
+    assert search_faiss("", workspace=tmp_path) == []
+
+
 def test_search_files_missing_workspace(tmp_path):
     """search_files on a workspace with no memory dir returns []."""
     from ai_memory.search import search_files

@@ -62,6 +62,10 @@ def cmd_search(args: argparse.Namespace) -> int:
         extra += ["--assistant", args.assistant]
     if args.graph:
         extra += ["--graph"]
+    if args.files_only:
+        extra += ["--files-only"]
+    if args.use_embeddings:
+        extra += ["--use-embeddings"]
     if args.metadata_only:
         extra += ["--metadata-only"]
     if args.fields:
@@ -121,25 +125,40 @@ def cmd_learn_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_state(args: argparse.Namespace) -> int:
-    extra = []
+    # memory_state.py uses positional subcommands (init, pending, summary,
+    # record-query, mark-loaded, load-fact, cleanup, list-sessions), so the
+    # action MUST come before --session and other flags. The CLI exposes the
+    # actions as --foo flags for ergonomics and re-shapes here.
+    action_map = [
+        ("init",          "init"),
+        ("pending",       "pending"),
+        ("summary",       "summary"),
+        ("record_query",  "record-query"),
+        ("mark_loaded",   "mark-loaded"),
+        ("load_fact",     "load-fact"),
+        ("cleanup",       "cleanup"),
+    ]
+    chosen = [name for attr, name in action_map if getattr(args, attr, False)]
+    if len(chosen) > 1:
+        print(
+            f"Error: pick exactly one action; got {', '.join('--' + c for c in chosen)}",
+            file=sys.stderr,
+        )
+        return 2
+    if not chosen:
+        print(
+            "Error: state requires one action flag — one of "
+            "--init, --pending, --summary, --record-query, --mark-loaded, "
+            "--load-fact, --cleanup",
+            file=sys.stderr,
+        )
+        return 2
+
+    extra = [chosen[0]]
     if args.session:
         extra += ["--session", args.session]
-    if args.init:
-        extra.append("--init")
-    if args.record_query:
-        extra += ["--record-query"]
-    if args.pending:
-        extra.append("--pending")
-    if args.summary:
-        extra.append("--summary")
-    if args.mark_loaded:
-        extra.append("--mark-loaded")
-    if args.load_fact:
-        extra.append("--load-fact")
-    if args.cleanup:
-        extra.append("--cleanup")
-
-    # Pass through any remaining args
+    # Action-specific extras (e.g. --fact, --facts, --query, --results,
+    # --scores, --state, --max-age-hours, --count) come through REMAINDER.
     if args.args:
         extra += args.args
 
@@ -183,7 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = subparsers.add_parser("search", help="Hybrid semantic + graph search (wrapper for hybrid_memory_search.py)")
     p.add_argument("query", help="Search query")
     p.add_argument("--assistant", "--mind", dest="assistant", help="Filter by assistant/mind")
-    p.add_argument("--graph", action="store_true", help="Use graph/fulltext search instead of vector")
+    p.add_argument("--graph", action="store_true", help="Also run graph/fulltext search")
+    p.add_argument("--files-only", action="store_true",
+                   help="Search only the markdown memory files (grep-based)")
+    p.add_argument("--use-embeddings", action="store_true",
+                   help="Use the local FAISS index instead of Neo4j vector search "
+                        "(not compatible with --assistant — FAISS is not tenant-aware)")
     p.add_argument("--metadata-only", action="store_true")
     p.add_argument("--fields", help="Comma-separated fields to return")
     # default=None so omission falls through to hybrid_memory_search.py's

@@ -28,16 +28,28 @@ def format_output(results: list, query_type: str) -> None:
         return
     print("=" * 60)
     for r in results:
-        print(f"Source: {r['source']}")
-        print(f"Score: {r.get('score', 'N/A')}")
+        # All field accesses use .get() so that `--fields` (which strips
+        # everything except the requested fields) doesn't trigger KeyError.
+        if r.get("source"):
+            print(f"Source: {r['source']}")
+        if "score" in r:
+            print(f"Score: {r['score']}")
         if r.get("assistant"):
             print(f"Assistant: {r['assistant']}")
         if r.get("name"):
             print(f"Name: {r['name']}")
+        if r.get("teaser"):
+            print(f"Teaser: {r['teaser']}")
         if r.get("relationships"):
             print(f"Related: {r['relationships']}")
+        if r.get("summary"):
+            print(f"Summary: {r['summary'][:500]}")
         if r.get("content"):
             print(f"Content:\n{r['content'][:500]}")
+        if r.get("key_points"):
+            print("Key points:")
+            for kp in r["key_points"][:10]:
+                print(f"  - {kp}")
         print()
 
 

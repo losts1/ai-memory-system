@@ -38,7 +38,12 @@ def search_vector(
 
     Requires Ollama (nomic-embed-text) and a running Neo4j instance.
     Returns [] on any error (Ollama unavailable, Neo4j unreachable, etc.).
+    Empty / whitespace-only queries short-circuit to [] without contacting
+    Ollama — nomic-embed-text returns a 0-dim vector for empty input, which
+    mismatches the configured 768-dim Neo4j vector index.
     """
+    if not query or not query.strip():
+        return []
     try:
         import ollama
 
@@ -52,11 +57,18 @@ def search_vector(
         vector_index = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
         try:
             with driver.session() as session:
+                # Facts written by ai_memory.learn.sync_facts store data in
+                # `summary` + `key_points` rather than `content`. Fall back to
+                # `summary` for `content` so downstream teasers/metadata work
+                # uniformly across both writer paths.
                 cypher = """
                 CALL db.index.vector.queryNodes($vector_index, $k, $embedding)
                 YIELD node, score
                 WHERE $assistant IS NULL OR node.assistant = $assistant
-                RETURN node.id AS id, node.name AS name, node.content AS content,
+                RETURN node.id AS id, node.name AS name,
+                       coalesce(node.content, node.summary) AS content,
+                       node.summary AS summary,
+                       node.key_points AS key_points,
                        node.assistant AS assistant, score
                 ORDER BY score DESC
                 LIMIT $k
@@ -76,6 +88,10 @@ def search_vector(
                         "name": record["name"],
                         "content": record["content"][:500] if record["content"] else None,
                     }
+                    if record.get("summary"):
+                        r["summary"] = record["summary"]
+                    if record.get("key_points"):
+                        r["key_points"] = record["key_points"]
                     if record.get("assistant"):
                         r["assistant"] = record["assistant"]
                     results.append(r)
@@ -99,13 +115,19 @@ def search_graph(
     Fulltext + relationship graph search via Neo4j.
 
     Uses the 'fact_content' fulltext index created by neo4j_seed.py.
-    Returns [] on any error.
+    Returns [] on any error. Empty / whitespace-only queries short-circuit
+    to [] before attempting Lucene escaping.
     """
+    if not query or not query.strip():
+        return []
     try:
         lucene_query = _escape_lucene(query)
         driver = get_driver(workspace)
         try:
             with driver.session() as session:
+                # Return summary + key_points alongside name so graph results
+                # carry the same teaser/content fields as vector results
+                # (Facts from ai_memory.learn store data in summary, not content).
                 cypher = """
                 CALL db.index.fulltext.queryNodes('fact_content', $lucene_query)
                 YIELD node, score
@@ -114,6 +136,9 @@ def search_graph(
                 WHERE related.id <> node.id
                   AND ($assistant IS NULL OR related.assistant = $assistant)
                 RETURN node.id AS id, node.name AS name,
+                       coalesce(node.content, node.summary) AS content,
+                       node.summary AS summary,
+                       node.key_points AS key_points,
                        node.assistant AS assistant,
                        score, collect(DISTINCT related.name)[0..5] AS related_facts
                 ORDER BY score DESC
@@ -132,8 +157,14 @@ def search_graph(
                         "source": f"neo4j://Fact/{record['name']}",
                         "score": round(record["score"], 3),
                         "name": record["name"],
-                        "relationships": ", ".join([r for r in related if r]),
+                        "relationships": ", ".join([rn for rn in related if rn]),
                     }
+                    if record["content"]:
+                        r["content"] = record["content"][:500]
+                    if record.get("summary"):
+                        r["summary"] = record["summary"]
+                    if record.get("key_points"):
+                        r["key_points"] = record["key_points"]
                     if record.get("assistant"):
                         r["assistant"] = record["assistant"]
                     results.append(r)
@@ -240,8 +271,10 @@ def search_faiss(
     """
     Search local FAISS index for semantic similarity (Layer 5 — offline fallback).
 
-    Returns [] if the FAISS index hasn't been built yet.
+    Returns [] if the FAISS index hasn't been built yet or the query is empty.
     """
+    if not query or not query.strip():
+        return []
     ws = get_workspace(workspace)
     index_path = ws / "memory" / "embeddings" / "faiss.index"
     meta_path = ws / "memory" / "embeddings" / "faiss_meta.pkl"
