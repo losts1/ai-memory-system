@@ -7,6 +7,82 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [1.2.0] - 2026-06-04
+
+QA round (ultrathink). Unifies the two Fact-sync paths under a single
+schema identity and fixes several correctness bugs in `ai_memory/state.py`.
+
+### Changed (schema — requires re-seed; see [MIGRATION.md](./MIGRATION.md))
+- **Fact identity is now `f.name`-primary.** `scripts/neo4j_sync.py` MERGEs
+  on `name` instead of `id=sha256(file:name)`. Same fact across multiple
+  session files now resolves to one node instead of duplicates.
+- `scripts/neo4j_seed.py`: new `CREATE CONSTRAINT fact_name_unique FOR (f:Fact) REQUIRE f.name IS UNIQUE`. Existing `fact_id_unique` retained.
+- `scripts/neo4j_sync.py`: `f.id` preserved via `coalesce(f.id, $id)` so
+  `neo4j_backfill_assistant.py` and embedding lookups keep working.
+
+### Fixed
+- `ai_memory.state.MemoryStateManager.cleanup()` returned 0 or 1 due to a
+  per-`ms` grouping in the `WITH` clause. Now collects sessions/queries/facts
+  into single rows then `FOREACH`-deletes, returning `size(sessions)`.
+- `ai_memory.state.MemoryStateManager.load_fact()` silently dropped state
+  tracking when called without a prior `record_query` (because `mark_loaded`
+  only updated pre-existing `MemoryFact` nodes). Now MERGEs the `MemoryFact`
+  in the session.
+- Read methods (`get_pending`, `get_summary`, helpers, `list_sessions`)
+  no longer call `_ensure_session` — reads no longer create empty sessions
+  or bump `updated_at`, preserving the `cleanup(max_age_hours)` TTL semantics.
+- Write methods (`init_session`, `record_query`, `mark_loaded`) ensure the
+  `MemoryState` node within the same driver session (1 round-trip instead of 2).
+- `ai_memory.MemoryClient.search(graph=True)` deduplicates graph results
+  by `name` against vector/FAISS results (vector wins).
+
+### Added
+- `ai_memory.MemoryClient.state(session_id=…)` and
+  `ai_memory.state.MemoryStateManager(session_id=…)` now bind a default
+  session_id. Session-id-taking methods accept `Optional[str]` and fall
+  back to the bound value; explicit per-call `session_id` still overrides.
+  Existing callers passing `session_id` to every call continue to work.
+- `MIGRATION.md`: v1.1 → v1.2 section with dedupe queries and re-seed steps.
+
+### Not changed (deliberate)
+- Cross-tenant `RELATED_TO` edges from the shared `Word` index were left
+  as-is — `Word`/`RELATED_TO` are tenant-shared by design.
+
+---
+
+## [1.1.0] - 2026-06-04
+
+Phase 4: Learn pipeline as library + examples.
+
+### Added
+- `ai_memory/learn.py` — `parse_learned_topics`, `extract_words`,
+  `normalize_name`, `is_topic_saturated`, `sync_facts`, `rebuild_graph`,
+  `link_related_facts`, `cleanup_orphaned_words`.
+- `ai_memory.MemoryClient.learn(days, *, assistant)` — scan
+  `{workspace}/memory/*.md` daily notes and sync as Fact nodes.
+- `examples/01_lazy_loading_session.py` — RLM lazy loading demo.
+- `examples/02_learn_and_traverse.py` — learn → traverse pipeline demo.
+- `docs/RLM.md` — Library API section covering all RLM modules.
+- `tests/test_learn.py` — 17 smoke tests (no Neo4j required).
+
+### Changed
+- `scripts/rlm/neo4j_learn_sync.py` — thin CLI wrapper over
+  `ai_memory.learn` (identical CLI behaviour).
+
+### Fixed
+- `ai_memory/learn.py`: UTC time-annotation regex was missing the
+  minute group (`\(\d+:\s*UTC\)` → `\(\d+:\d+\s*UTC\)`).
+- `ai_memory/learn.py`: dead `if not line.startswith('|'): pass` block
+  now actually skips markdown table rows.
+- `ai_memory/learn.py`: progress messages in `_sync_fact_tx` now print
+  to stderr instead of polluting stdout.
+- `scripts/rlm/neo4j_learn_sync.py`: success-log message no longer
+  prints stale names when middle topics fail to sync.
+- `examples/02_learn_and_traverse.py`: graceful Neo4j error handling
+  and tempfile cleanup via `try/finally`.
+
+---
+
 ## [1.0.0] - 2026-06-03
 
 First stable release. Phases 0–3 and 6 are complete. The public redistribution
