@@ -70,6 +70,11 @@ and one for the CLI scripts (N-1–N-3, m-1–m-4). 113 tests, all passing.
   graph, backfill tagged 0 facts. Fixed: both functions now use
   `elementId(n)`, which is present on every node regardless of how it was
   created. `count_skipped_null_id()` removed — no longer applicable.
+- **[N-3 follow-up] `create_created_by_relationships` could produce
+  duplicate `CREATED_BY` edges under concurrent or re-run conditions.**
+  The `CREATE (n)-[:CREATED_BY]->(a)` with a `WHERE NOT` pre-check is not
+  atomic — two overlapping sessions can both pass the guard before either
+  commits. Replaced with `MERGE`, which is idempotent.
 - **[m-1] `HAS_WORD` removed from `_ALLOWED_RELS`.**
   At depth=1 it terminates at `Word` nodes (not `:Fact`), returning nothing.
   At depth=2 it finds Facts sharing a word — an expensive, undocumented
