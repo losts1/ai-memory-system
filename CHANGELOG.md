@@ -7,6 +7,95 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [1.3.3] - 2026-06-05
+
+QA audit round 8 — broad inconsistency sweep across all library and script
+files. Fixes span two QA sessions: one for the library core (M-1–M-5, C-1)
+and one for the CLI scripts (N-1–N-3, m-1–m-4). 113 tests, all passing.
+
+### Fixed
+- **[M-1] `parse_learned_topics` bullet extraction was fragile.**
+  `_parse_key_points_and_summary` (used by `parse_learned_topics`) did not
+  skip fenced code blocks, and its numbered-list regex (`^\d+\.`) matched
+  version strings like `1.2.3 foo` as list items. Both bugs were absent in
+  `_extract_bullets` (used by `parse_frontmatter_topic`). Fixed by porting
+  fence tracking and tightening the regex to `^\d+\.\s` in the older parser,
+  unifying behavior across both daily-note and frontmatter parse paths.
+- **[M-2] `apply_metadata_only` always returned `related_count=0` for graph
+  search results.** `search_graph` returned a `relationships` string field;
+  `apply_metadata_only` looked for `relation_count` (a non-existent key) then
+  fell back to `related_count`, also absent. Fixed: `search_graph` now
+  includes `related_count: len(related)` in every result dict; the fallback
+  chain in `apply_metadata_only` is removed.
+- **[M-3] `MemoryClient.state()` opened a second driver on every call.**
+  `MemoryStateManager.__init__` called `get_driver()` unconditionally,
+  creating a new connection pool even when `MemoryClient` already had a
+  cached driver. Fixed: `MemoryStateManager` accepts an optional `driver=`
+  kwarg with an `_owns_driver` flag controlling whether `close()` tears it
+  down. `MemoryClient.state()` now passes its cached driver.
+- **[M-4] `sync_facts` and `rebuild_graph` ran graph maintenance in two
+  separate transactions.** `link_related_facts` and `cleanup_orphaned_words`
+  were sequential `execute_write` calls; a failure between them left the
+  graph with broken RELATED_TO edges or orphaned Words with no rollback path.
+  Fixed: combined into a single `_post_sync_tx` write transaction.
+- **[M-5] `_build_traversal_cypher` always joined the Word index.**
+  The `OPTIONAL MATCH (f)-[:HAS_WORD]->(w:Word) / WITH f, collect(w.text)`
+  clause was hardcoded in the query template, paying the full Word-join cost
+  even when only `name` was requested. Fixed: the join is now emitted
+  conditionally on `need_words`.
+- **[C-1] `Source` nodes and `FROM_SOURCE` edges were invisible to schema
+  validation.** `learn._sync_fact_tx` has always written `Source` nodes and
+  `FROM_SOURCE` edges, but `neo4j_seed.py` created no constraint on
+  `Source.name`, and neither `validate_schema()` nor `verify_schema.py` knew
+  the type existed. Concurrent `MERGE` runs could create duplicate Source
+  nodes. Fixed: `source_name_unique` constraint added to `neo4j_seed.py`,
+  `_config.py` `EXPECTED_CONSTRAINTS`, and `verify_schema.py`. A new
+  `test_config_expected_constraints_matches_verify_schema` test guards against
+  future drift between the two validators.
+- **[N-1] `neo4j_traverse.py` accepted `--relationship PREREQUISITE_OF` at
+  the CLI but rejected it in the library.** `PREREQUISITE_OF` was removed
+  from `_ALLOWED_RELS` in v1.3.2 but left in the argparse `choices` list,
+  producing a confusing runtime error after a clean parse. Removed from
+  choices.
+- **[N-2] `--fields related_count` silently suppressed graph search output.**
+  `_MEANINGFUL_FIELDS` in `hybrid_memory_search.py` was not updated when
+  `related_count` was added to `search_graph` results (M-2 fix), so
+  `_has_meaningful_fields()` returned False and the section was suppressed.
+  Added `related_count` to the set.
+- **[N-3] `neo4j_backfill_assistant.py` silently skipped all Facts created
+  via `ai_memory.learn`.** Both `backfill_label` and
+  `create_created_by_relationships` keyed batch iteration on `n.id IS NOT
+  NULL`. Facts written by `learn._sync_fact_tx` (which MERGEs on `name`
+  without setting `id`) were therefore unreachable; on a pure-learn-path
+  graph, backfill tagged 0 facts. Fixed: both functions now use
+  `elementId(n)`, which is present on every node regardless of how it was
+  created. `count_skipped_null_id()` removed — no longer applicable.
+- **[m-1] `HAS_WORD` removed from `_ALLOWED_RELS`.**
+  At depth=1 it terminates at `Word` nodes (not `:Fact`), returning nothing.
+  At depth=2 it finds Facts sharing a word — an expensive, undocumented
+  equivalent of `RELATED_TO`. Removed from `_ALLOWED_RELS` and from
+  `neo4j_traverse.py`'s argparse choices.
+- **[m-3] `load_fact` empty-string session opt-out replaced with `track=`
+  flag.** The old pattern (`pass session_id=""` to skip tracking) was
+  undocumented except in an inline comment and inconsistent with
+  `_resolve_sid`'s semantics elsewhere in `MemoryStateManager`. New
+  signature: `load_fact(session_id, fact_name, *, track=True)`.
+- **[m-4] `neo4j_learn_sync.py` used `requests` for embeddings; all other
+  paths used the `ollama` SDK.** The script called the raw
+  `/api/embeddings` REST endpoint via `requests.post`, while `search.py`
+  and `neo4j_sync.py` used `ollama.embeddings()`. Migrated to the SDK;
+  `OLLAMA_URL` env var dependency removed in favour of the SDK's
+  `OLLAMA_HOST`. Two-attempt retry preserved.
+
+### Added
+- **[m-2] `MemoryClient.graph_stats()`** — wraps `ai_memory.graph.graph_stats`
+  with the client's cached driver, consistent with `traverse()` and
+  `trace_parameter()`. Previously `graph_stats` was exported in `__all__`
+  but had no `MemoryClient` wrapper, requiring callers to import it directly
+  and manage the driver themselves.
+
+---
+
 ## [1.3.2] - 2026-06-04
 
 Neo4j-usability round (QA round 7). Targeted findings from running the
