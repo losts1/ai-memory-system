@@ -57,7 +57,7 @@ except ImportError:
         pass
 
 try:
-    import requests
+    import ollama
     NEO4J_VECTOR_AVAILABLE = True
 except ImportError:
     pass
@@ -116,7 +116,7 @@ def _build_fact_metadata(topic: dict) -> dict:
     }
 
 
-def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir: Path):
+def _get_embedding_with_cache(text: str, model: str, cache_dir: Path):
     text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
     cache_file = cache_dir / f'{model}_{text_hash}.pkl'
     if cache_file.exists():
@@ -125,16 +125,10 @@ def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir:
                 return pickle.load(f)
         except Exception:
             pass
-    last_exc = None
     for attempt in range(2):
         try:
-            response = requests.post(
-                f'{ollama_url}/api/embeddings',
-                json={'model': model, 'prompt': text[:2000]},
-                timeout=30
-            )
-            response.raise_for_status()
-            embedding = response.json().get('embedding')
+            response = ollama.embeddings(model=model, prompt=text[:2000])
+            embedding = response["embedding"]
             if embedding:
                 try:
                     with open(cache_file, 'wb') as f:
@@ -142,8 +136,7 @@ def _get_embedding_with_cache(text: str, model: str, ollama_url: str, cache_dir:
                 except Exception:
                     pass
             return embedding
-        except Exception as e:
-            last_exc = e
+        except Exception:
             if attempt == 0:
                 time.sleep(0.5)
     return None
@@ -277,7 +270,6 @@ def update_neo4j_vector(topics: list, driver) -> int:
     try:
         cache_dir = _WORKSPACE / 'memory' / 'embeddings'
         model = os.environ.get('EMBEDDING_MODEL', 'nomic-embed-text')
-        ollama_url = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
         texts, names = [], []
         for topic in topics:
             text = _prepare_embedding_text(topic.get('key_points', []))
@@ -289,7 +281,7 @@ def update_neo4j_vector(topics: list, driver) -> int:
         embeddings = [None] * len(texts)
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {
-                executor.submit(_get_embedding_with_cache, text, model, ollama_url, cache_dir): i
+                executor.submit(_get_embedding_with_cache, text, model, cache_dir): i
                 for i, text in enumerate(texts)
             }
             for future in as_completed(futures):

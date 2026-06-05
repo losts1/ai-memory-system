@@ -255,7 +255,8 @@ def test_memory_client_instantiates(tmp_path):
 
 def test_memory_client_has_expected_methods():
     from ai_memory import MemoryClient
-    for method in ['search', 'traverse', 'trace_parameter', 'state', 'learn', 'close']:
+    for method in ['search', 'traverse', 'trace_parameter', 'graph_stats',
+                   'state', 'learn', 'close']:
         assert hasattr(MemoryClient, method), f"Missing method: {method}"
 
 
@@ -435,11 +436,14 @@ def test_graph_functions_accept_driver_kwarg():
 
 
 def test_prerequisite_of_removed_from_allowed_rels():
-    """PREREQUISITE_OF had no edges in any sync path and no code creates them.
-    It was removed from _ALLOWED_RELS to avoid silent empty results."""
+    """PREREQUISITE_OF and HAS_WORD were removed from _ALLOWED_RELS:
+    PREREQUISITE_OF — no edges exist; HAS_WORD — depth=1 yields Word nodes
+    (not :Fact), depth=2 is an expensive RELATED_TO equivalent with undefined semantics."""
     from ai_memory.graph import _ALLOWED_RELS
     assert "PREREQUISITE_OF" not in _ALLOWED_RELS, \
         "PREREQUISITE_OF was dead code — it must not appear in _ALLOWED_RELS"
+    assert "HAS_WORD" not in _ALLOWED_RELS, \
+        "HAS_WORD has confusing Fact-traversal semantics — it must not appear in _ALLOWED_RELS"
     assert "RELATED_TO" in _ALLOWED_RELS
     assert "SHARES_PARAMETER" in _ALLOWED_RELS  # reserved for RLM tracing
 

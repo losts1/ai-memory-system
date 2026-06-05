@@ -33,7 +33,7 @@ from ai_memory.exceptions import (
 )
 from ai_memory.metadata import apply_fields_filter, apply_metadata_only, make_teaser
 from ai_memory.search import search_faiss, search_files, search_graph, search_vector
-from ai_memory.graph import graph_stats, trace_parameter as _trace_parameter, traverse as _traverse
+from ai_memory.graph import graph_stats as _graph_stats, trace_parameter as _trace_parameter, traverse as _traverse
 from ai_memory.state import MemoryStateManager
 from ai_memory.learn import (
     parse_frontmatter_topic,
@@ -49,6 +49,7 @@ from typing import List, Optional
 # `from ai_memory import traverse` works as expected.
 traverse = _traverse
 trace_parameter = _trace_parameter
+graph_stats = _graph_stats
 sync_facts = _sync_facts
 rebuild_graph = _rebuild_graph
 
@@ -226,6 +227,13 @@ class MemoryClient:
             assistant=assistant,
             driver=self.driver(),
         )
+
+    def graph_stats(self) -> dict:
+        """Return graph statistics: node counts by label, edge counts, average Fact degree.
+
+        Returns a result dict with keys: success, stats.
+        """
+        return _graph_stats(driver=self.driver())
 
     # ------------------------------------------------------------------
     # Session state

@@ -19,9 +19,11 @@ DEFAULT_DEPTH = 2
 MAX_DEPTH_CAP = 3
 DEFAULT_MAX_NODES = 50
 
-_ALLOWED_RELS = {'RELATED_TO', 'HAS_WORD', 'SHARES_PARAMETER'}
+_ALLOWED_RELS = {'RELATED_TO', 'SHARES_PARAMETER'}
 # SHARES_PARAMETER is reserved for RLM parameter tracing (trace_parameter()).
-# PREREQUISITE_OF was removed — no edges of this type exist and no code creates them.
+# HAS_WORD removed: depth=1 reaches Word nodes (not :Fact), depth=2 is an expensive
+# equivalent of RELATED_TO via Word hops — undefined semantics, better avoided.
+# PREREQUISITE_OF removed — no edges of this type exist and no code creates them.
 
 
 # ---------------------------------------------------------------------------

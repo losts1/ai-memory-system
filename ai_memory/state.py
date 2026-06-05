@@ -312,13 +312,13 @@ class MemoryStateManager:
     # ------------------------------------------------------------------
 
     def load_fact(
-        self, session_id: Optional[str], fact_name: str
+        self, session_id: Optional[str], fact_name: str, *, track: bool = True
     ) -> Optional[Dict[str, Any]]:
         """Return full Fact content, optionally tracking it as loaded in session state.
 
-        Tracking happens when an explicit session_id is passed, or when this
-        manager was constructed with a bound session_id. To explicitly skip
-        tracking on a bound manager, pass session_id="".
+        Tracking happens when ``track=True`` (default) and a session_id is
+        available (explicit arg or bound default). Pass ``track=False`` to
+        retrieve the Fact without updating session state.
         """
         with self.driver.session() as s:
             result = s.run(
@@ -335,9 +335,8 @@ class MemoryStateManager:
                 "key_points": rec["key_points"] or [],
             }
 
-        # Resolve sid: explicit arg wins, then bound default. Empty string opts out.
         sid = session_id if session_id is not None else self.session_id
-        if sid:
+        if track and sid:
             now = _now()
             with self.driver.session() as s:
                 self._ensure_state_in(s, sid, now)

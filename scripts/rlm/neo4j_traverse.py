@@ -119,7 +119,7 @@ Examples:
     parser.add_argument('--depth', type=int, default=DEFAULT_DEPTH,
                         help=f'Max traversal depth (default: {DEFAULT_DEPTH}, cap: {MAX_DEPTH_CAP})')
     parser.add_argument('--relationship', default='RELATED_TO',
-                        choices=['RELATED_TO', 'HAS_WORD', 'SHARES_PARAMETER', 'PREREQUISITE_OF'])
+                        choices=['RELATED_TO', 'SHARES_PARAMETER'])
     parser.add_argument('--fields', default='name',
                         help='Comma-separated fields per node (default: name). '
                              'Options: name,key_points,summary,teaser,kp_count,related_count,top_words')
