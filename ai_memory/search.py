@@ -219,6 +219,7 @@ def search_graph(
                     "score": round(record["score"], 3),
                     "name": record["name"],
                     "relationships": ", ".join([rn for rn in related if rn]),
+                    "related_count": len(related),
                 }
                 if record["content"]:
                     r["content"] = record["content"][:500]

@@ -38,7 +38,7 @@ def apply_metadata_only(result: Dict[str, Any]) -> Dict[str, Any]:
         'score': score,
         'teaser': teaser,
         'kp_count': len(result.get('key_points') or []),
-        'related_count': result.get('relation_count', result.get('related_count', 0)),
+        'related_count': result.get('related_count', 0),
         'top_words': result.get('top_words', []),
         'source': result.get('source', '')
     }

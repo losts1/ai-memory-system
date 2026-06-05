@@ -115,20 +115,31 @@ def _parse_key_points_and_summary(body: str):
     key_points = []
     summary_lines = []
     in_list = False
+    in_fence = False
+    fence_marker = None
     for line in lines:
-        line = line.strip()
-        if not line:
+        stripped = line.strip()
+        if stripped.startswith(('```', '~~~')):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif fence_marker == marker:
+                in_fence = False
+                fence_marker = None
             continue
-        if line.startswith('-') or re.match(r'^\d+\.', line):
-            point = re.sub(r'^[-\d\.]+\s*', '', line).strip()
+        if in_fence or not stripped:
+            continue
+        if stripped.startswith('-') or re.match(r'^\d+\.\s', stripped):
+            point = re.sub(r'^[-\d\.]+\s*', '', stripped).strip()
             if point:
                 key_points.append(point)
             in_list = True
-        elif in_list and not line.startswith('#') and not line.startswith('**'):
-            if not line.startswith('|'):
-                summary_lines.append(line)
+        elif in_list and not stripped.startswith('#') and not stripped.startswith('**'):
+            if not stripped.startswith('|'):
+                summary_lines.append(stripped)
         else:
-            summary_lines.append(line)
+            summary_lines.append(stripped)
             in_list = False
     summary = ' '.join(summary_lines[:3])
     if len(summary) > 500:
@@ -313,6 +324,12 @@ def cleanup_orphaned_words(tx) -> None:
     tx.run("MATCH (w:Word) WHERE NOT (()-[:HAS_WORD]->(w)) DELETE w")
 
 
+def _post_sync_tx(tx, max_df_ratio: float = 0.1, min_shared: int = 2) -> None:
+    """Combined maintenance transaction: rebuild RELATED_TO + clean up orphaned Words."""
+    link_related_facts(tx, max_df_ratio=max_df_ratio, min_shared=min_shared)
+    cleanup_orphaned_words(tx)
+
+
 # -------------------------------------------------------------------------
 # Neo4j write functions
 # -------------------------------------------------------------------------
@@ -395,8 +412,7 @@ def sync_facts(
             for topic in topics:
                 if session.execute_write(_sync_fact_tx, topic, assistant):
                     synced += 1
-            session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
-            session.execute_write(cleanup_orphaned_words)
+            session.execute_write(_post_sync_tx, max_df_ratio=0.1, min_shared=2)
         return synced
     finally:
         if driver is not None:
@@ -412,8 +428,7 @@ def rebuild_graph(*, workspace=None) -> int:
     try:
         driver = get_driver(workspace)
         with driver.session() as session:
-            session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
-            session.execute_write(cleanup_orphaned_words)
+            session.execute_write(_post_sync_tx, max_df_ratio=0.1, min_shared=2)
             result = session.run("MATCH ()-[r:RELATED_TO]->() RETURN count(r) AS cnt")
             rec = result.single()
             return rec['cnt'] if rec else 0

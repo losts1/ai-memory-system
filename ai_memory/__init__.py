@@ -246,7 +246,7 @@ class MemoryClient:
                 mgr.init_session()
                 pending = mgr.get_pending()
         """
-        return MemoryStateManager(workspace=self._workspace, session_id=session_id)
+        return MemoryStateManager(workspace=self._workspace, session_id=session_id, driver=self.driver())
 
     # ------------------------------------------------------------------
     # Learn sync

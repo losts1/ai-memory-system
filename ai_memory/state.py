@@ -34,13 +34,13 @@ class MemoryStateManager:
     Explicit per-call session_id still overrides the bound default.
     """
 
-    def __init__(self, workspace=None, session_id: Optional[str] = None):
-        self.driver = None
-        self.driver = get_driver(workspace)
+    def __init__(self, workspace=None, session_id: Optional[str] = None, driver=None):
+        self._owns_driver = driver is None
+        self.driver = get_driver(workspace) if driver is None else driver
         self.session_id = session_id
 
     def close(self):
-        if self.driver:
+        if self._owns_driver and self.driver:
             self.driver.close()
 
     def __enter__(self):

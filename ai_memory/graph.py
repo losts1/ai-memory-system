@@ -89,15 +89,18 @@ def _build_traversal_cypher(
         return_parts.append('COUNT { MATCH (f)-[:RELATED_TO]->() } AS related_count')
 
     return_clause = ', '.join(return_parts)
-    words_clause = ', word_list[0..5] AS top_words' if need_words else ''
+    if need_words:
+        words_join = "\n        OPTIONAL MATCH (f)-[:HAS_WORD]->(w:Word)\n        WITH f, collect(w.text) AS word_list"
+        words_clause = ', word_list[0..5] AS top_words'
+    else:
+        words_join = ""
+        words_clause = ""
 
     return f"""
         MATCH (start:Fact {{name: $start_name}})-[:{rel_type}*1..{depth}]-(f:Fact)
         WHERE f.name <> $start_name
           AND ($assistant IS NULL OR f.assistant = $assistant)
-        WITH DISTINCT f
-        OPTIONAL MATCH (f)-[:HAS_WORD]->(w:Word)
-        WITH f, collect(w.text) AS word_list
+        WITH DISTINCT f{words_join}
         RETURN {return_clause}{words_clause}
         LIMIT $max_nodes
     """
