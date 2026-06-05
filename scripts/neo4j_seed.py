@@ -116,8 +116,8 @@ def create_schema(driver):
             """)
             # Detect existing index with wrong property list (IF NOT EXISTS skips recreation)
             result = session.run(
-                "SHOW INDEXES YIELD name, properties "
-                "WHERE name = 'fact_content' RETURN properties"
+                "SHOW INDEXES YIELD name, type, properties "
+                "WHERE name = 'fact_content' AND type = 'FULLTEXT' RETURN properties"
             )
             rec = result.single()
             if rec and "summary" not in (rec["properties"] or []):

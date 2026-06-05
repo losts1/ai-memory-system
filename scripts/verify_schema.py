@@ -123,6 +123,10 @@ def diff_schema(live_constraints, live_indexes, live_vector, live_fulltext):
             f"MISSING vector index: {EXPECTED_VECTOR_INDEX!r} "
             f"(set NEO4J_VECTOR_INDEX env var if the index has a different name)"
         )
+    elif live_vector["dims"] is None:
+        issues.append(
+            f"Vector index {EXPECTED_VECTOR_INDEX!r} has no dimensions configured"
+        )
     elif live_vector["dims"] != EXPECTED_VECTOR_DIMS:
         issues.append(
             f"Vector index {EXPECTED_VECTOR_INDEX!r} has wrong dimensions: "

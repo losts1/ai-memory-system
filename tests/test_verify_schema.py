@@ -161,3 +161,28 @@ def test_diff_schema_detects_missing_summary_in_fulltext():
     assert any("summary" in i for i in issues), (
         f"Expected a 'missing summary' issue, got: {issues}"
     )
+
+
+def test_diff_schema_detects_vector_dims_none():
+    """Vector index exists but dimensions are not configured (dims=None)."""
+    from verify_schema import (
+        diff_schema, EXPECTED_CONSTRAINTS, EXPECTED_INDEXES,
+        EXPECTED_VECTOR_INDEX, EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_PROPS,
+    )
+    live_indexes = {
+        name: {"type": "RANGE", "properties": set()}
+        for name in EXPECTED_INDEXES
+    }
+    issues = diff_schema(
+        live_constraints=EXPECTED_CONSTRAINTS,
+        live_indexes=live_indexes,
+        live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": None},
+        live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
+    )
+    assert any("dimensions" in i or "dims" in i for i in issues), (
+        f"Expected a dimensions issue for dims=None, got: {issues}"
+    )
+    # Must NOT produce a misleading 'wrong dimensions' message with the raw None value
+    assert not any("got None" in i for i in issues), (
+        f"Should report 'no dimensions configured', not 'got None': {issues}"
+    )
