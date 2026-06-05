@@ -347,6 +347,21 @@ def test_validate_schema_signature():
     assert "vector_index" in sig.parameters
 
 
+def test_config_expected_constraints_matches_verify_schema():
+    """_config.py EXPECTED_CONSTRAINTS must be consistent with scripts/verify_schema.py.
+    Mirrors the indexes parity guard — constraints have two separate hardcoded sets."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from ai_memory._config import EXPECTED_CONSTRAINTS as config_constraints
+    from verify_schema import EXPECTED_CONSTRAINTS as vs_constraints
+    assert set(config_constraints) == vs_constraints, (
+        f"_config.py EXPECTED_CONSTRAINTS diverged from verify_schema.py:\n"
+        f"  only in _config:      {set(config_constraints) - vs_constraints}\n"
+        f"  only in verify_schema: {vs_constraints - set(config_constraints)}"
+    )
+
+
 def test_config_expected_indexes_matches_verify_schema():
     """_config.py EXPECTED_INDEXES must be consistent with scripts/verify_schema.py.
     Two schema validators diverged; this is the regression guard."""

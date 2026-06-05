@@ -107,6 +107,7 @@ EXPECTED_CONSTRAINTS: Dict[str, tuple] = {
     "fact_name_unique":    ("Fact",      "name"),
     "session_id_unique":   ("Session",   "id"),
     "assistant_id_unique": ("Assistant", "id"),
+    "source_name_unique":  ("Source",    "name"),
 }
 # Range indexes — must match neo4j_seed.py and scripts/verify_schema.py
 EXPECTED_INDEXES = {

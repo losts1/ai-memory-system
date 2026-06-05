@@ -30,6 +30,7 @@ EXPECTED_CONSTRAINTS = {
     "fact_id_unique",          # Fact.id  — legacy hash-based compat
     "session_id_unique",       # Session.id
     "assistant_id_unique",     # Assistant.id
+    "source_name_unique",      # Source.name — provenance nodes written by learn._sync_fact_tx
     # word_text_unique is created at runtime by ai_memory/learn.sync_facts(),
     # not by neo4j_seed.py, so it is intentionally excluded here.
 }

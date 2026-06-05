@@ -44,6 +44,8 @@ def create_schema(driver):
             "CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
             # Phase 2 multi-tenancy: Assistant nodes must have unique stable IDs
             "CREATE CONSTRAINT assistant_id_unique IF NOT EXISTS FOR (a:Assistant) REQUIRE a.id IS UNIQUE",
+            # Source nodes are created by ai_memory/learn._sync_fact_tx for provenance tracking
+            "CREATE CONSTRAINT source_name_unique IF NOT EXISTS FOR (s:Source) REQUIRE s.name IS UNIQUE",
         ]
 
         for constraint in constraints:

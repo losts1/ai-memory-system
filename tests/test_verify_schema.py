@@ -32,13 +32,14 @@ def test_expected_indexes_contains_required_entries():
 
 
 def test_expected_constraints_contains_required_entries():
-    """EXPECTED_CONSTRAINTS must include the four constraints from neo4j_seed.py."""
+    """EXPECTED_CONSTRAINTS must include all constraints from neo4j_seed.py."""
     from verify_schema import EXPECTED_CONSTRAINTS
     required = {
         "fact_name_unique",
         "fact_id_unique",
         "session_id_unique",
         "assistant_id_unique",
+        "source_name_unique",   # Source provenance nodes written by learn._sync_fact_tx
     }
     assert required <= EXPECTED_CONSTRAINTS, (
         f"EXPECTED_CONSTRAINTS missing: {required - EXPECTED_CONSTRAINTS}"
