@@ -179,10 +179,7 @@ def test_diff_schema_detects_vector_dims_none():
         live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": None},
         live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
     )
-    assert any("dimensions" in i or "dims" in i for i in issues), (
-        f"Expected a dimensions issue for dims=None, got: {issues}"
-    )
-    # Must NOT produce a misleading 'wrong dimensions' message with the raw None value
-    assert not any("got None" in i for i in issues), (
-        f"Should report 'no dimensions configured', not 'got None': {issues}"
+    expected_msg = f"Vector index {EXPECTED_VECTOR_INDEX!r} has no dimensions configured"
+    assert issues == [expected_msg], (
+        f"Expected exactly [{expected_msg!r}], got: {issues}"
     )
