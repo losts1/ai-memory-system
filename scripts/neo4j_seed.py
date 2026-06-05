@@ -142,7 +142,12 @@ def create_schema(driver):
 
 
 def verify_schema(driver):
-    """Verify schema was created."""
+    """Quick count-only sanity check after create_schema().
+
+    Prints total constraint and index counts — does NOT validate that the
+    correct named items exist. For rigorous validation run:
+        python3 scripts/verify_schema.py
+    """
 
     with driver.session() as session:
         result = session.run("SHOW CONSTRAINTS")
@@ -165,6 +170,7 @@ def verify_schema(driver):
                 print("  Note: no vector index found (requires Neo4j 5.x+)")
         except Exception as e:
             print(f"  Warning: could not verify vector index: {e}")
+    print("  Run `python3 scripts/verify_schema.py` for full schema validation.")
 
 
 def main():

@@ -34,6 +34,11 @@ EXPECTED_CONSTRAINTS = {
     # not by neo4j_seed.py, so it is intentionally excluded here.
 }
 
+# Constraint-backing indexes created at runtime (not by neo4j_seed.py).
+# Their backing RANGE indexes appear in SHOW INDEXES, so we suppress them
+# from the --strict extras list to avoid false-positive noise.
+EXPECTED_RUNTIME_CONSTRAINTS = {"word_text_unique"}
+
 EXPECTED_INDEXES = {
     "fact_assistant_idx",      # Fact.assistant — multi-tenancy filter
     "fact_source_idx",         # Fact.source
@@ -45,6 +50,9 @@ EXPECTED_INDEXES = {
 
 EXPECTED_VECTOR_INDEX = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
 EXPECTED_VECTOR_DIMS  = 768   # nomic-embed-text
+# NOTE: vector similarity function ('cosine') is set by neo4j_seed.py but not
+# validated here. A euclidean index would pass this check with correct dims.
+# Add similarity_function validation if strict similarity enforcement is needed.
 EXPECTED_FULLTEXT     = "fact_content"
 EXPECTED_FULLTEXT_PROPS = {"name", "content", "summary"}
 
@@ -205,7 +213,7 @@ def main():
 
     if args.strict:
         expected_all = EXPECTED_INDEXES | {EXPECTED_VECTOR_INDEX, EXPECTED_FULLTEXT}
-        extras = set(indexes) - expected_all - EXPECTED_CONSTRAINTS
+        extras = set(indexes) - expected_all - EXPECTED_CONSTRAINTS - EXPECTED_RUNTIME_CONSTRAINTS
         if extras:
             print(f"\n  [INFO] Extra indexes in DB (not required):")
             for e in sorted(extras):

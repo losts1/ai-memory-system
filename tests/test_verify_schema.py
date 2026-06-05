@@ -53,6 +53,15 @@ def test_expected_fulltext_props_includes_summary():
     assert "content" in EXPECTED_FULLTEXT_PROPS
 
 
+def test_expected_runtime_constraints_contains_word_text_unique():
+    """word_text_unique is runtime-created (by learn.sync_facts) and must be in
+    EXPECTED_RUNTIME_CONSTRAINTS so it doesn't appear as a false extra in --strict."""
+    from verify_schema import EXPECTED_RUNTIME_CONSTRAINTS, EXPECTED_CONSTRAINTS
+    assert "word_text_unique" in EXPECTED_RUNTIME_CONSTRAINTS
+    # Must NOT be in EXPECTED_CONSTRAINTS — it's not created by neo4j_seed.py
+    assert "word_text_unique" not in EXPECTED_CONSTRAINTS
+
+
 # ---------------------------------------------------------------------------
 # diff_schema() logic tests
 # ---------------------------------------------------------------------------
