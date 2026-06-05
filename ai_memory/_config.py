@@ -108,11 +108,18 @@ EXPECTED_CONSTRAINTS: Dict[str, tuple] = {
     "session_id_unique":   ("Session",   "id"),
     "assistant_id_unique": ("Assistant", "id"),
 }
+# Range indexes — must match neo4j_seed.py and scripts/verify_schema.py
 EXPECTED_INDEXES = {
     "fact_assistant_idx":    ("Fact",    "assistant"),
+    "fact_source_idx":       ("Fact",    "source"),
+    "fact_source_file_idx":  ("Fact",    "source_file"),
+    "fact_created_at_idx":   ("Fact",    "created_at"),
+    "session_date_idx":      ("Session", "date"),
     "session_assistant_idx": ("Session", "assistant"),
-    "fact_content":          ("Fact",    "fulltext"),
 }
+# Fulltext index — tracked separately from range indexes
+EXPECTED_FULLTEXT = os.getenv("NEO4J_FULLTEXT_INDEX", "fact_content")
+EXPECTED_FULLTEXT_PROPS = {"name", "content", "summary"}
 
 
 def validate_schema(driver, *, vector_index: Optional[str] = None) -> Dict[str, List[str]]:
@@ -133,13 +140,30 @@ def validate_schema(driver, *, vector_index: Optional[str] = None) -> Dict[str, 
             if r["labelsOrTypes"] and r["properties"]:
                 present_c[r["name"]] = (r["labelsOrTypes"][0], r["properties"][0])
         present_i = {}
-        for r in s.run("SHOW INDEXES YIELD name, type"):
+        for r in s.run("SHOW INDEXES YIELD name, type WHERE type <> 'LOOKUP' RETURN name, type"):
             present_i[r["name"]] = r["type"]
         # Vector indexes (for vector_index sanity)
         for r in s.run("SHOW INDEXES YIELD name, type WHERE type = 'VECTOR' RETURN name"):
             out["vector_indexes"].append(r["name"])
+        # Fulltext index — check existence AND property coverage
+        ft_found = False
+        for r in s.run(
+            "SHOW INDEXES YIELD name, type, properties "
+            "WHERE type = 'FULLTEXT' AND name = $name RETURN properties",
+            name=EXPECTED_FULLTEXT,
+        ):
+            ft_found = True
+            live_props = set(r["properties"] or [])
+            missing_props = EXPECTED_FULLTEXT_PROPS - live_props
+            if missing_props:
+                out["drift"].append(
+                    f"fulltext index {EXPECTED_FULLTEXT!r} missing properties: {sorted(missing_props)}"
+                )
+            else:
+                out["ok"].append(f"fulltext index {EXPECTED_FULLTEXT!r}")
+        if not ft_found:
+            out["missing"].append(f"fulltext index {EXPECTED_FULLTEXT!r}")
 
-    expected_c_shapes = {v: k for k, v in EXPECTED_CONSTRAINTS.items()}
     for cname, shape in EXPECTED_CONSTRAINTS.items():
         if cname in present_c:
             out["ok"].append(f"constraint {cname} ({shape})")

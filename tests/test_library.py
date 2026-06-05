@@ -347,6 +347,34 @@ def test_validate_schema_signature():
     assert "vector_index" in sig.parameters
 
 
+def test_config_expected_indexes_matches_verify_schema():
+    """_config.py EXPECTED_INDEXES must be consistent with scripts/verify_schema.py.
+    Two schema validators diverged; this is the regression guard."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from ai_memory._config import EXPECTED_INDEXES as config_indexes
+    from verify_schema import EXPECTED_INDEXES as vs_indexes
+    assert set(config_indexes) == vs_indexes, (
+        f"_config.py EXPECTED_INDEXES diverged from verify_schema.py:\n"
+        f"  only in _config:      {set(config_indexes) - vs_indexes}\n"
+        f"  only in verify_schema: {vs_indexes - set(config_indexes)}"
+    )
+
+
+def test_config_expected_fulltext_props_matches_verify_schema():
+    """_config.py EXPECTED_FULLTEXT_PROPS must match verify_schema.py."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from ai_memory._config import EXPECTED_FULLTEXT_PROPS as config_props
+    from verify_schema import EXPECTED_FULLTEXT_PROPS as vs_props
+    assert config_props == vs_props, (
+        f"_config.py EXPECTED_FULLTEXT_PROPS {config_props} != "
+        f"verify_schema.py {vs_props}"
+    )
+
+
 def test_search_graph_cypher_uses_related_to_or_learned_in():
     """Issue #N3: search_graph must walk RELATED_TO|LEARNED_IN, not LEARNED_IN
     alone. Inspect the function's source as a regression guard."""
