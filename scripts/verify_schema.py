@@ -53,7 +53,7 @@ EXPECTED_VECTOR_DIMS  = 768   # nomic-embed-text
 # NOTE: vector similarity function ('cosine') is set by neo4j_seed.py but not
 # validated here. A euclidean index would pass this check with correct dims.
 # Add similarity_function validation if strict similarity enforcement is needed.
-EXPECTED_FULLTEXT     = "fact_content"
+EXPECTED_FULLTEXT     = os.getenv("NEO4J_FULLTEXT_INDEX", "fact_content")
 EXPECTED_FULLTEXT_PROPS = {"name", "content", "summary"}
 
 

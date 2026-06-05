@@ -110,7 +110,7 @@ def search_vector(
             CALL db.index.vector.queryNodes($vector_index, $k, $embedding)
             YIELD node, score
             WHERE $assistant IS NULL OR node.assistant = $assistant
-            RETURN node.id AS id, node.name AS name,
+            RETURN node.name AS name,
                    coalesce(node.content, node.summary) AS content,
                    node.summary AS summary,
                    node.key_points AS key_points,
@@ -162,9 +162,9 @@ def search_graph(
     """
     Fulltext + relationship graph search via Neo4j.
 
-    Uses the 'fact_content' fulltext index created by neo4j_seed.py and walks
-    both RELATED_TO (the modern Word-index path) and LEARNED_IN (the legacy
-    Session path) to compute ``related_facts``. Empty / whitespace-only
+    Uses the fulltext index (NEO4J_FULLTEXT_INDEX env var, default 'fact_content')
+    created by neo4j_seed.py and walks both RELATED_TO (the modern Word-index
+    path) and LEARNED_IN (the legacy Session path) to compute ``related_facts``. Empty / whitespace-only
     queries return [] before Lucene escaping.
 
     Raises the same Neo4j exception hierarchy as ``search_vector``.
@@ -173,6 +173,7 @@ def search_graph(
         return []
     lucene_query = _escape_lucene(query)
 
+    fulltext_index = os.getenv("NEO4J_FULLTEXT_INDEX", "fact_content")
     owns_driver = driver is None
     if owns_driver:
         driver = get_driver(workspace)
@@ -183,13 +184,13 @@ def search_graph(
             # pattern. Previously only LEARNED_IN was traversed, dropping
             # related_facts for 73% of results silently.
             cypher = """
-            CALL db.index.fulltext.queryNodes('fact_content', $lucene_query)
+            CALL db.index.fulltext.queryNodes($fulltext_index, $lucene_query)
             YIELD node, score
             WHERE $assistant IS NULL OR node.assistant = $assistant
             OPTIONAL MATCH (node)-[:RELATED_TO|LEARNED_IN]-(related:Fact)
             WHERE related.name <> node.name
               AND ($assistant IS NULL OR related.assistant = $assistant)
-            RETURN node.id AS id, node.name AS name,
+            RETURN node.name AS name,
                    coalesce(node.content, node.summary) AS content,
                    node.summary AS summary,
                    node.key_points AS key_points,
@@ -201,6 +202,7 @@ def search_graph(
             try:
                 result = session.run(
                     cypher,
+                    fulltext_index=fulltext_index,
                     lucene_query=lucene_query,
                     limit=max_results,
                     assistant=assistant,

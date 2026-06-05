@@ -261,8 +261,14 @@ class MemoryClient:
         Scans {workspace}/memory/*.md for daily notes in the time window.
         Returns the count of successfully synced Fact nodes.
 
+        Facts created by this method are findable via ``search_graph()``
+        (fulltext index on name/summary) but NOT via ``search_vector()``
+        (vector index) — embeddings are not generated here. To make facts
+        semantically searchable, run ``neo4j_sync.py --full`` which writes
+        embeddings via Ollama.
+
         Note: does not apply saturation filtering. For production sync with
-        deduplication, use the `ai-memory learn-sync` CLI command.
+        deduplication, use the ``ai-memory learn-sync`` CLI command.
         """
         import re
         from datetime import datetime, timedelta

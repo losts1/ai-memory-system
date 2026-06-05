@@ -359,6 +359,28 @@ def test_search_graph_cypher_uses_related_to_or_learned_in():
         "the lone LEARNED_IN traversal was the v1.3.1 bug; should be replaced"
 
 
+def test_search_graph_uses_configurable_fulltext_index():
+    """search_graph must use $fulltext_index Cypher param (from NEO4J_FULLTEXT_INDEX env)
+    rather than passing the index name as a hardcoded string literal to queryNodes."""
+    import inspect
+    from ai_memory.search import search_graph
+    src = inspect.getsource(search_graph)
+    assert "$fulltext_index" in src, \
+        "search_graph must pass $fulltext_index as a parameterised Cypher argument"
+    assert "queryNodes('fact_content'" not in src, \
+        "search_graph must not hardcode 'fact_content' as the queryNodes argument"
+
+
+def test_search_vector_cypher_omits_node_id():
+    """node.id is not written by learn.py and is unused in result construction.
+    Fetching it adds payload with no benefit — regression guard for its removal."""
+    import inspect
+    from ai_memory.search import search_vector
+    src = inspect.getsource(search_vector)
+    assert "node.id AS id" not in src, \
+        "search_vector must not fetch unused node.id"
+
+
 def test_search_functions_accept_driver_kwarg():
     """Issue #N1: search_vector and search_graph must accept driver= for pooling."""
     import inspect
