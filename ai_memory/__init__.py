@@ -65,10 +65,10 @@ class MemoryClient:
                    AI_MEMORY_DIR env var or ~/.ai-memory.
 
     Driver pooling:
-        Before v1.3.2 every search/traverse call opened its own driver and
-        closed it, paying ~28ms per call in handshake overhead. v1.3.2
-        caches the driver on the client and reuses it across calls.
-        Pass ``driver=`` directly to library functions to bypass the cache.
+        Before v1.3.2 every call opened its own driver and closed it, paying
+        ~28ms per call in handshake overhead. v1.3.2 caches the driver on the
+        client and reuses it across search(), traverse(), and trace_parameter()
+        calls. Pass ``driver=`` directly to library functions to bypass the cache.
     """
 
     def __init__(self, workspace=None):
@@ -195,6 +195,7 @@ class MemoryClient:
             max_nodes=max_nodes,
             metadata_only=metadata_only,
             assistant=assistant,
+            driver=self.driver(),
         )
 
     def trace_parameter(
@@ -223,6 +224,7 @@ class MemoryClient:
             metadata_only=metadata_only,
             fields=fields,
             assistant=assistant,
+            driver=self.driver(),
         )
 
     # ------------------------------------------------------------------

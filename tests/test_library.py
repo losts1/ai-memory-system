@@ -381,6 +381,26 @@ def test_search_vector_cypher_omits_node_id():
         "search_vector must not fetch unused node.id"
 
 
+def test_graph_functions_accept_driver_kwarg():
+    """graph.traverse, graph.trace_parameter, graph.graph_stats must accept driver=
+    so MemoryClient can pass its cached connection (avoids ~28ms handshake per call)."""
+    import inspect
+    from ai_memory.graph import traverse, trace_parameter, graph_stats
+    for fn in (traverse, trace_parameter, graph_stats):
+        params = inspect.signature(fn).parameters
+        assert "driver" in params, f"{fn.__name__} missing driver= parameter"
+
+
+def test_prerequisite_of_removed_from_allowed_rels():
+    """PREREQUISITE_OF had no edges in any sync path and no code creates them.
+    It was removed from _ALLOWED_RELS to avoid silent empty results."""
+    from ai_memory.graph import _ALLOWED_RELS
+    assert "PREREQUISITE_OF" not in _ALLOWED_RELS, \
+        "PREREQUISITE_OF was dead code — it must not appear in _ALLOWED_RELS"
+    assert "RELATED_TO" in _ALLOWED_RELS
+    assert "SHARES_PARAMETER" in _ALLOWED_RELS  # reserved for RLM tracing
+
+
 def test_search_functions_accept_driver_kwarg():
     """Issue #N1: search_vector and search_graph must accept driver= for pooling."""
     import inspect

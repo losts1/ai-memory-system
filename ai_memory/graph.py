@@ -19,7 +19,9 @@ DEFAULT_DEPTH = 2
 MAX_DEPTH_CAP = 3
 DEFAULT_MAX_NODES = 50
 
-_ALLOWED_RELS = {'RELATED_TO', 'HAS_WORD', 'SHARES_PARAMETER', 'PREREQUISITE_OF'}
+_ALLOWED_RELS = {'RELATED_TO', 'HAS_WORD', 'SHARES_PARAMETER'}
+# SHARES_PARAMETER is reserved for RLM parameter tracing (trace_parameter()).
+# PREREQUISITE_OF was removed — no edges of this type exist and no code creates them.
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +186,16 @@ def traverse(
     max_nodes: int = DEFAULT_MAX_NODES,
     metadata_only: bool = False,
     assistant: Optional[str] = None,
+    driver=None,
 ) -> Dict[str, Any]:
     """
     Expand the neighbourhood of a starting Fact node up to `depth` hops.
 
     Returns a result dict with keys: success, start, depth, relationship,
     assistant, total_nodes, nodes.
+
+    Pass an existing ``driver`` to reuse it across calls (MemoryClient does
+    this automatically). When omitted, a one-shot driver is created+closed.
     """
     depth = max(1, min(depth, MAX_DEPTH_CAP))
     fields = fields or ['name']
@@ -201,9 +207,10 @@ def traverse(
         }
 
     cypher = _build_traversal_cypher(relationship, depth, fields, metadata_only, bool(filter_word))
-    driver = None
-    try:
+    owns_driver = driver is None
+    if owns_driver:
         driver = get_driver(workspace)
+    try:
         nodes: List[Dict] = []
         visited: Set[str] = {start}
         with driver.session() as session:
@@ -228,7 +235,7 @@ def traverse(
             except Exception as e:
                 return {'success': False, 'error': f'Traversal query failed: {e}'}
     finally:
-        if driver is not None:
+        if owns_driver and driver is not None:
             driver.close()
 
     return {
@@ -252,10 +259,14 @@ def trace_parameter(
     metadata_only: bool = False,
     fields: Optional[List[str]] = None,
     assistant: Optional[str] = None,
+    driver=None,
 ) -> Dict[str, Any]:
     """
     RLM-style parameter tracing: follow RELATED_TO / SHARES_PARAMETER edges
     and return only nodes whose key_points or Words contain `parameter`.
+
+    Pass an existing ``driver`` to reuse it across calls (MemoryClient does
+    this automatically). When omitted, a one-shot driver is created+closed.
     """
     depth = max(1, min(depth, MAX_DEPTH_CAP))
     fields = fields or ['name', 'teaser', 'kp_count', 'related_count', 'top_words']
@@ -282,9 +293,10 @@ def trace_parameter(
         LIMIT $max_nodes
     """ % {'depth': depth}
 
-    driver = None
-    try:
+    owns_driver = driver is None
+    if owns_driver:
         driver = get_driver(workspace)
+    try:
         nodes: List[Dict] = []
         visited: Set[str] = {start}
         with driver.session() as session:
@@ -306,7 +318,7 @@ def trace_parameter(
             except Exception as e:
                 return {'success': False, 'error': f'Parameter trace query failed: {e}'}
     finally:
-        if driver is not None:
+        if owns_driver and driver is not None:
             driver.close()
 
     return {
@@ -320,11 +332,16 @@ def trace_parameter(
     }
 
 
-def graph_stats(*, workspace=None) -> Dict[str, Any]:
-    """Return graph statistics: node counts by label, edge counts, average Fact degree."""
-    driver = None
-    try:
+def graph_stats(*, workspace=None, driver=None) -> Dict[str, Any]:
+    """Return graph statistics: node counts by label, edge counts, average Fact degree.
+
+    Pass an existing ``driver`` to reuse it across calls. When omitted, a
+    one-shot driver is created+closed.
+    """
+    owns_driver = driver is None
+    if owns_driver:
         driver = get_driver(workspace)
+    try:
         stats: Dict[str, Any] = {}
         with driver.session() as session:
             stats['node_counts'] = _get_label_counts(session)
@@ -345,6 +362,6 @@ def graph_stats(*, workspace=None) -> Dict[str, Any]:
             except Exception:
                 pass
     finally:
-        if driver is not None:
+        if owns_driver and driver is not None:
             driver.close()
     return {'success': True, 'stats': stats}
