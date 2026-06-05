@@ -122,7 +122,8 @@ def test_diff_schema_detects_wrong_vector_dims():
     """diff_schema must flag vector indexes with incorrect dimensions."""
     from verify_schema import (
         diff_schema, EXPECTED_CONSTRAINTS, EXPECTED_INDEXES,
-        EXPECTED_VECTOR_INDEX, EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_PROPS,
+        EXPECTED_VECTOR_INDEX, EXPECTED_VECTOR_DIMS,
+        EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_PROPS,
     )
     live_indexes = {
         name: {"type": "RANGE", "properties": set()}
@@ -134,8 +135,12 @@ def test_diff_schema_detects_wrong_vector_dims():
         live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": 1536},  # wrong
         live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
     )
-    assert any("dimensions" in i or "dims" in i for i in issues), (
-        f"Expected a dimension mismatch issue, got: {issues}"
+    expected_msg = (
+        f"Vector index {EXPECTED_VECTOR_INDEX!r} has wrong dimensions: "
+        f"expected {EXPECTED_VECTOR_DIMS}, got 1536"
+    )
+    assert issues == [expected_msg], (
+        f"Expected exactly [{expected_msg!r}], got: {issues}"
     )
 
 

@@ -120,7 +120,14 @@ def create_schema(driver):
                 "WHERE name = 'fact_content' AND type = 'FULLTEXT' RETURN properties"
             )
             rec = result.single()
-            if rec and "summary" not in (rec["properties"] or []):
+            if rec is None:
+                # IF NOT EXISTS skipped — something named 'fact_content' exists but
+                # is not a FULLTEXT index (e.g. a stale RANGE index with the same name).
+                print(
+                    "  Warning: 'fact_content' exists but is NOT a FULLTEXT index.\n"
+                    "  Run: DROP INDEX fact_content; then re-run neo4j_seed.py."
+                )
+            elif "summary" not in (rec["properties"] or []):
                 print(
                     "  Warning: fact_content index exists but does NOT cover n.summary.\n"
                     "  Run: DROP INDEX fact_content; then re-run neo4j_seed.py to upgrade."
