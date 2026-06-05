@@ -263,8 +263,8 @@ def create_created_by_relationships(
                 create_q = """
                     UNWIND $pairs AS p
                     MATCH (a:Assistant {id: p[1]})
-                    MATCH (n) WHERE elementId(n) = p[0] AND NOT (n)-[:CREATED_BY]->(a)
-                    CREATE (n)-[:CREATED_BY]->(a)
+                    MATCH (n) WHERE elementId(n) = p[0]
+                    MERGE (n)-[:CREATED_BY]->(a)
                     RETURN count(*) AS done
                 """
                 with driver.session() as s:
