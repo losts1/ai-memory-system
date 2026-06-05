@@ -255,7 +255,7 @@ def test_memory_client_instantiates(tmp_path):
 
 def test_memory_client_has_expected_methods():
     from ai_memory import MemoryClient
-    for method in ['search', 'traverse', 'trace_parameter', 'state', 'close']:
+    for method in ['search', 'traverse', 'trace_parameter', 'state', 'learn', 'close']:
         assert hasattr(MemoryClient, method), f"Missing method: {method}"
 
 
