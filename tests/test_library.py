@@ -374,3 +374,23 @@ def test_get_query_timeout_returns_float():
     t = get_query_timeout()
     assert isinstance(t, float)
     assert 1.0 <= t <= 600.0
+
+
+def test_neo4j_seed_contains_required_indexes():
+    """Regression: seed script must define the full required index set.
+
+    Source-inspection test — no Neo4j connection required.
+    Catches the case where someone removes an index from neo4j_seed.py
+    without updating verify_schema.py's expected set.
+    """
+    from pathlib import Path
+    seed_src = (Path(__file__).parent.parent / "scripts" / "neo4j_seed.py").read_text()
+    for expected in [
+        "fact_created_at_idx",   # temporal range queries on Fact.created_at
+        "fact_source_file_idx",  # source_file lookups (written by learn.py)
+        "n.summary",             # fulltext index must cover Fact.summary
+    ]:
+        assert expected in seed_src, (
+            f"neo4j_seed.py is missing {expected!r} — "
+            "add it to the indexes list or fulltext definition"
+        )
