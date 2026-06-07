@@ -833,3 +833,39 @@ def test_search_graph_empty_query_with_trust_filter_returns_empty():
     from ai_memory.search import search_graph
     assert search_graph("", trust_filter="trusted") == []
     assert search_graph("\t", trust_filter="high_risk") == []
+
+
+def test_search_vector_passes_trust_filter_to_session_run():
+    """trust_filter must reach the session.run kwargs, not be silently dropped."""
+    import sys
+    from unittest.mock import MagicMock, patch
+    from ai_memory.search import search_vector
+
+    captured_kwargs: dict = {}
+
+    # search_vector does `import ollama` inside the function; inject a fake module
+    # so the import succeeds even when ollama is not installed.
+    fake_ollama = MagicMock()
+    fake_ollama.embeddings.return_value = {"embedding": [0.0] * 768}
+
+    mock_result = MagicMock()
+    mock_result.__iter__ = MagicMock(return_value=iter([]))
+
+    def capturing_run(cypher, **kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_result
+
+    mock_session = MagicMock()
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+    mock_session.run.side_effect = capturing_run
+
+    mock_driver = MagicMock()
+    mock_driver.session.return_value = mock_session
+
+    with patch.dict(sys.modules, {"ollama": fake_ollama}), \
+         patch("ai_memory.search.get_driver", return_value=mock_driver):
+        search_vector("test query", trust_filter="trusted")
+
+    assert "trust_filter" in captured_kwargs
+    assert captured_kwargs["trust_filter"] == "trusted"

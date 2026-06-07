@@ -132,6 +132,7 @@ class MemoryClient:
             fields:         Return only these fields from each result.
             trust_filter:   Filter results to Facts with this provenance_trust value
                             (e.g. "trusted", "suspicious"). None = no filter.
+                            Ignored when use_embeddings=True (FAISS has no provenance metadata).
 
         Returns:
             List of result dicts. Empty list if Ollama unavailable or query empty.
