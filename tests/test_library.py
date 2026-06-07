@@ -738,3 +738,33 @@ def test_write_fact_does_not_close_supplied_driver():
     result = write_fact(topic, driver=mock_driver)
     assert result is True
     mock_driver.close.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — MemoryClient.write() and Provenance export
+# ---------------------------------------------------------------------------
+
+def test_memory_client_has_write_method():
+    from ai_memory import MemoryClient
+    assert hasattr(MemoryClient, 'write')
+    assert callable(MemoryClient.write)
+
+
+def test_provenance_importable_from_ai_memory():
+    from ai_memory import Provenance
+    assert callable(Provenance)
+
+
+def test_memory_client_write_returns_bool_without_neo4j(tmp_path):
+    """write() must return a bool without raising when Neo4j is unreachable."""
+    import os
+    os.environ.setdefault('NEO4J_PASSWORD', 'test')
+    from ai_memory import MemoryClient, Provenance
+    with MemoryClient(workspace=tmp_path) as client:
+        result = client.write(
+            "Test Fact",
+            summary="A test fact.",
+            key_points=["point one"],
+            provenance=Provenance(source="api", trust="trusted"),
+        )
+    assert isinstance(result, bool)
