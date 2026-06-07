@@ -571,3 +571,56 @@ description: No provenance.
     topics = parse_frontmatter_topic(content, filepath)
     assert len(topics) == 1
     assert topics[0].get("provenance") is None
+
+
+def test_parse_provenance_frontmatter_blank_line_in_block():
+    """Blank line inside provenance block must not truncate remaining fields."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: web_fetch
+
+  trust: suspicious
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.source == "web_fetch"
+    assert prov.trust == "suspicious"
+
+
+def test_parse_provenance_frontmatter_url_with_port():
+    """original_source with a port number (colon in value) must round-trip intact."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: web_fetch
+  original_source: https://example.com:8080/path
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.original_source == "https://example.com:8080/path"
+
+
+def test_parse_provenance_frontmatter_float_risk_score_silently_dropped():
+    """A float string for risk_score is silently dropped (int() raises ValueError)."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: api
+  risk_score: 3.7
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.risk_score is None  # silently dropped, not corrupted

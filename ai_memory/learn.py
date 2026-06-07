@@ -180,12 +180,6 @@ def _strip_frontmatter(content: str) -> str:
     return _FRONTMATTER_RE.sub('', content, count=1)
 
 
-_PROV_BLOCK_RE = re.compile(
-    r'^provenance:\s*\n((?:[ \t]+\S[^\n]*\n?)*)',
-    re.MULTILINE,
-)
-
-
 def _parse_yaml_inline_list(val: str) -> list:
     """Parse a YAML inline list '[a, b, c]' to a Python list of strings."""
     val = val.strip()
@@ -199,17 +193,32 @@ def _parse_provenance_frontmatter(content: str) -> Optional[Provenance]:
 
     Handles one level of indentation under 'provenance:' and parses
     inline lists for the 'signals' field (e.g. signals: [a, b]).
+    Tolerates blank lines inside the provenance block.
     Returns None if no frontmatter or no provenance block is found.
     """
     fm_match = _FRONTMATTER_RE.match(content)
     if not fm_match:
         return None
     fm_body = fm_match.group(1)
-    prov_match = _PROV_BLOCK_RE.search(fm_body)
-    if not prov_match:
+
+    # Collect indented lines that follow a bare 'provenance:' line,
+    # tolerating blank/whitespace-only lines within the block.
+    prov_lines: list = []
+    in_prov = False
+    for line in fm_body.splitlines():
+        if line.strip() == 'provenance:':
+            in_prov = True
+            continue
+        if in_prov:
+            if line and line[0] not in (' ', '\t'):
+                break  # reached a new top-level key
+            prov_lines.append(line)
+
+    if not prov_lines:
         return None
+
     raw: dict = {}
-    for line in prov_match.group(1).splitlines():
+    for line in prov_lines:
         stripped = line.strip()
         if not stripped or ':' not in stripped:
             continue
@@ -225,6 +234,7 @@ def _parse_provenance_frontmatter(content: str) -> Optional[Provenance]:
                 pass
         else:
             raw[key] = val
+
     if not raw.get('source'):
         return None
     try:
