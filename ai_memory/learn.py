@@ -412,13 +412,13 @@ def write_fact(
     ``topic`` must have keys: name, summary, key_points, source_file, created_at.
     An optional ``provenance`` key (Provenance instance) writes provenance_* props.
 
-    Returns True on success, False on any error. Supply an existing ``driver``
-    (e.g. from MemoryClient) to avoid per-call handshake cost.
+    Returns True on success, False on any error (including unreachable Neo4j).
+    Never raises.
     """
     owns_driver = driver is None
-    if owns_driver:
-        driver = get_driver(workspace)
     try:
+        if owns_driver:
+            driver = get_driver(workspace)
         with driver.session() as session:
             result = session.execute_write(_sync_fact_tx, topic, assistant)
             return bool(result)

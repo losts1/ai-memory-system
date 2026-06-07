@@ -666,6 +666,7 @@ def test_sync_fact_tx_writes_provenance_props():
     assert captured_params.get('prov_source') == 'web_fetch'
     assert captured_params.get('prov_trust') == 'suspicious'
     assert captured_params.get('prov_risk_score') == 47
+    assert captured_params.get('prov_risk_band') == 'medium'
     assert captured_params.get('prov_signals') == ['exfiltration']
 
 
@@ -697,6 +698,43 @@ def test_sync_fact_tx_no_provenance_no_prov_params():
     assert not any(k.startswith('prov_') for k in captured_params)
 
 
-def test_write_fact_importable():
+def test_write_fact_returns_false_on_driver_failure(monkeypatch, tmp_path):
+    """write_fact must return False (not raise) when Neo4j is unreachable."""
+    monkeypatch.setenv('NEO4J_URI', 'bolt://127.0.0.1:1')  # nothing listens on port 1
+    monkeypatch.setenv('NEO4J_PASSWORD', 'test')
     from ai_memory.learn import write_fact
-    assert callable(write_fact)
+    topic = {
+        'name': 'Test',
+        'summary': 'test',
+        'key_points': [],
+        'source_file': 'api',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': None,
+    }
+    # get_driver raises Neo4jConnectionError — write_fact must catch it and return False
+    result = write_fact(topic, workspace=tmp_path)
+    assert result is False
+
+
+def test_write_fact_does_not_close_supplied_driver():
+    """write_fact must not close a driver supplied by the caller."""
+    from unittest.mock import MagicMock
+    from ai_memory.learn import write_fact
+
+    mock_driver = MagicMock()
+    mock_session = MagicMock()
+    mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+    mock_session.execute_write.return_value = True
+
+    topic = {
+        'name': 'Test',
+        'summary': 'test',
+        'key_points': [],
+        'source_file': 'api',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': None,
+    }
+    result = write_fact(topic, driver=mock_driver)
+    assert result is True
+    mock_driver.close.assert_not_called()
