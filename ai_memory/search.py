@@ -70,6 +70,7 @@ def search_vector(
     workspace=None,
     max_results: int = 5,
     assistant: Optional[str] = None,
+    trust_filter: Optional[str] = None,
     driver=None,
 ) -> List[dict]:
     """
@@ -109,7 +110,8 @@ def search_vector(
             cypher = """
             CALL db.index.vector.queryNodes($vector_index, $k, $embedding)
             YIELD node, score
-            WHERE $assistant IS NULL OR node.assistant = $assistant
+            WHERE ($assistant IS NULL OR node.assistant = $assistant)
+              AND ($trust_filter IS NULL OR node.provenance_trust = $trust_filter)
             RETURN node.name AS name,
                    coalesce(node.content, node.summary) AS content,
                    node.summary AS summary,
@@ -125,6 +127,7 @@ def search_vector(
                     k=max_results,
                     embedding=embedding,
                     assistant=assistant,
+                    trust_filter=trust_filter,
                     timeout=get_query_timeout(),
                 )
                 rows = list(result)
@@ -157,6 +160,7 @@ def search_graph(
     workspace=None,
     max_results: int = 5,
     assistant: Optional[str] = None,
+    trust_filter: Optional[str] = None,
     driver=None,
 ) -> List[dict]:
     """
@@ -186,7 +190,8 @@ def search_graph(
             cypher = """
             CALL db.index.fulltext.queryNodes($fulltext_index, $lucene_query)
             YIELD node, score
-            WHERE $assistant IS NULL OR node.assistant = $assistant
+            WHERE ($assistant IS NULL OR node.assistant = $assistant)
+              AND ($trust_filter IS NULL OR node.provenance_trust = $trust_filter)
             OPTIONAL MATCH (node)-[:RELATED_TO|LEARNED_IN]-(related:Fact)
             WHERE related.name <> node.name
               AND ($assistant IS NULL OR related.assistant = $assistant)
@@ -206,6 +211,7 @@ def search_graph(
                     lucene_query=lucene_query,
                     limit=max_results,
                     assistant=assistant,
+                    trust_filter=trust_filter,
                     timeout=get_query_timeout(),
                 )
                 rows = list(result)

@@ -40,7 +40,9 @@ from ai_memory.learn import (
     parse_learned_topics,
     sync_facts as _sync_facts,
     rebuild_graph as _rebuild_graph,
+    write_fact as _write_fact,
 )
+from ai_memory.provenance import Provenance
 
 from pathlib import Path
 from typing import List, Optional
@@ -115,6 +117,7 @@ class MemoryClient:
         use_embeddings: bool = False,
         metadata_only: bool = False,
         fields: Optional[List[str]] = None,
+        trust_filter: Optional[str] = None,
     ) -> List[dict]:
         """
         Hybrid search across Neo4j vector index and optionally the graph.
@@ -127,14 +130,24 @@ class MemoryClient:
             use_embeddings: Use local FAISS instead of Neo4j vector search.
             metadata_only:  Return lightweight metadata only (name, teaser, counts).
             fields:         Return only these fields from each result.
+            trust_filter:   Filter results to Facts with this provenance_trust value
+                            (e.g. "trusted", "suspicious"). None = no filter.
+                            Ignored when use_embeddings=True (FAISS has no provenance metadata).
 
         Returns:
             List of result dicts. Empty list if Ollama unavailable or query empty.
 
         Raises:
+            ValueError               — if trust_filter is set with use_embeddings=True.
             Neo4jConnectionError / Neo4jIndexNotFoundError / Neo4jQueryError —
             see ai_memory.exceptions.
         """
+        if use_embeddings and trust_filter is not None:
+            raise ValueError(
+                "trust_filter is incompatible with use_embeddings=True: "
+                "FAISS results have no provenance metadata. "
+                "Use the default Neo4j vector search (use_embeddings=False) instead."
+            )
         ws = self._workspace
         if use_embeddings:
             results = search_faiss(query, workspace=ws, max_results=max_results)
@@ -142,12 +155,14 @@ class MemoryClient:
             results = search_vector(
                 query, workspace=ws, max_results=max_results,
                 assistant=assistant, driver=self.driver(),
+                trust_filter=trust_filter,
             )
 
         if graph:
             graph_results = search_graph(
                 query, workspace=ws, max_results=max_results,
                 assistant=assistant, driver=self.driver(),
+                trust_filter=trust_filter,
             )
             # Dedupe by name: vector/FAISS results win, graph fills the rest.
             seen = {r.get("name") for r in results if r.get("name")}
@@ -306,10 +321,52 @@ class MemoryClient:
 
         return _sync_facts(topics, workspace=self._workspace, assistant=assistant)
 
+    # ------------------------------------------------------------------
+    # Direct write
+    # ------------------------------------------------------------------
+
+    def write(
+        self,
+        name: str,
+        *,
+        summary: str = "",
+        key_points: list[str] | None = None,
+        provenance: "Provenance | None" = None,
+    ) -> bool:
+        """Write a single Fact node directly to Neo4j with optional provenance.
+
+        Creates or merges a Fact with the given name. For agents that want to
+        store a memory entry with explicit provenance without the markdown pipeline.
+
+        Args:
+            name:       Fact node name (unique key in Neo4j).
+            summary:    Short description of the fact.
+            key_points: Bullet-point details.
+            provenance: Optional Provenance; writes provenance_* Neo4j props.
+
+        Returns:
+            True on success, False if Neo4j is unreachable or write failed.
+            Never raises.
+        """
+        from datetime import datetime, timezone
+        topic = {
+            'name': name,
+            'summary': summary,
+            'key_points': key_points or [],
+            'source_file': 'api',
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'provenance': provenance,
+        }
+        try:
+            return _write_fact(topic, driver=self.driver())
+        except Exception:
+            return False
+
 
 __all__ = [
     'MemoryClient',
     'MemoryStateManager',
+    'Provenance',
     'get_driver',
     'get_workspace',
     'validate_schema',

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from ai_memory._config import get_driver
+from ai_memory.provenance import Provenance
 
 
 # -------------------------------------------------------------------------
@@ -179,6 +180,69 @@ def _strip_frontmatter(content: str) -> str:
     return _FRONTMATTER_RE.sub('', content, count=1)
 
 
+def _parse_yaml_inline_list(val: str) -> list:
+    """Parse a YAML inline list '[a, b, c]' to a Python list of strings."""
+    val = val.strip()
+    if val.startswith('[') and val.endswith(']'):
+        return [x.strip().strip("'\"") for x in val[1:-1].split(',') if x.strip()]
+    return [val] if val else []
+
+
+def _parse_provenance_frontmatter(content: str) -> Optional[Provenance]:
+    """Extract the nested 'provenance:' block from YAML frontmatter.
+
+    Handles one level of indentation under 'provenance:' and parses
+    inline lists for the 'signals' field (e.g. signals: [a, b]).
+    Tolerates blank lines inside the provenance block.
+    Returns None if no frontmatter or no provenance block is found.
+    """
+    fm_match = _FRONTMATTER_RE.match(content)
+    if not fm_match:
+        return None
+    fm_body = fm_match.group(1)
+
+    # Collect indented lines that follow a bare 'provenance:' line,
+    # tolerating blank/whitespace-only lines within the block.
+    prov_lines: list = []
+    in_prov = False
+    for line in fm_body.splitlines():
+        if line.strip() == 'provenance:':
+            in_prov = True
+            continue
+        if in_prov:
+            if line and line[0] not in (' ', '\t'):
+                break  # reached a new top-level key
+            prov_lines.append(line)
+
+    if not prov_lines:
+        return None
+
+    raw: dict = {}
+    for line in prov_lines:
+        stripped = line.strip()
+        if not stripped or ':' not in stripped:
+            continue
+        key, _, val = stripped.partition(':')
+        key = key.strip()
+        val = val.strip()
+        if key == 'signals':
+            raw[key] = _parse_yaml_inline_list(val)
+        elif key == 'risk_score':
+            try:
+                raw[key] = int(val)
+            except ValueError:
+                pass
+        else:
+            raw[key] = val
+
+    if not raw.get('source'):
+        return None
+    try:
+        return Provenance.from_dict(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_bullets(body: str, max_points: int = 10) -> List[str]:
     """Extract markdown bullets ('- x', '* x', '1. x') as key_points.
 
@@ -247,12 +311,14 @@ def parse_frontmatter_topic(content: str, filepath: Path) -> List[dict]:
         first_para = body.split('\n\n', 1)[0].strip() if body else ''
         summary = first_para[:497] + '...' if len(first_para) > 500 else first_para
 
+    prov = _parse_provenance_frontmatter(content)
     return [{
         'name': name,
         'summary': summary,
         'key_points': _extract_bullets(body),
         'source_file': filepath.name,
         'created_at': _date_from_filepath(filepath),
+        'provenance': prov,
     }]
 
 
@@ -334,6 +400,35 @@ def _post_sync_tx(tx, max_df_ratio: float = 0.1, min_shared: int = 2) -> None:
 # Neo4j write functions
 # -------------------------------------------------------------------------
 
+def write_fact(
+    topic: dict,
+    *,
+    assistant: str | None = None,
+    driver=None,
+    workspace=None,
+) -> bool:
+    """Write a single Fact node to Neo4j.
+
+    ``topic`` must have keys: name, summary, key_points, source_file, created_at.
+    An optional ``provenance`` key (Provenance instance) writes provenance_* props.
+
+    Returns True on success, False on any error (including unreachable Neo4j).
+    Never raises.
+    """
+    owns_driver = driver is None
+    try:
+        if owns_driver:
+            driver = get_driver(workspace)
+        with driver.session() as session:
+            result = session.execute_write(_sync_fact_tx, topic, assistant)
+            return bool(result)
+    except Exception:
+        return False
+    finally:
+        if owns_driver and driver is not None:
+            driver.close()
+
+
 def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
     """Transaction: MERGE a Fact node + Word index edges."""
     try:
@@ -355,6 +450,11 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
         if assistant:
             set_clause += ", f.assistant = $assistant"
             params['assistant'] = assistant
+        if topic.get('provenance') is not None:
+            for k, v in topic['provenance'].to_dict().items():
+                param_key = f'prov_{k}'
+                set_clause += f', f.provenance_{k} = ${param_key}'
+                params[param_key] = v
         result = tx.run(f"""
             MERGE (f:Fact {{name: $name}})
             {set_clause}
