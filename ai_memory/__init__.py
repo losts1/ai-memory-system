@@ -117,6 +117,7 @@ class MemoryClient:
         use_embeddings: bool = False,
         metadata_only: bool = False,
         fields: Optional[List[str]] = None,
+        trust_filter: Optional[str] = None,
     ) -> List[dict]:
         """
         Hybrid search across Neo4j vector index and optionally the graph.
@@ -129,6 +130,8 @@ class MemoryClient:
             use_embeddings: Use local FAISS instead of Neo4j vector search.
             metadata_only:  Return lightweight metadata only (name, teaser, counts).
             fields:         Return only these fields from each result.
+            trust_filter:   Filter results to Facts with this provenance_trust value
+                            (e.g. "trusted", "suspicious"). None = no filter.
 
         Returns:
             List of result dicts. Empty list if Ollama unavailable or query empty.
@@ -144,12 +147,14 @@ class MemoryClient:
             results = search_vector(
                 query, workspace=ws, max_results=max_results,
                 assistant=assistant, driver=self.driver(),
+                trust_filter=trust_filter,
             )
 
         if graph:
             graph_results = search_graph(
                 query, workspace=ws, max_results=max_results,
                 assistant=assistant, driver=self.driver(),
+                trust_filter=trust_filter,
             )
             # Dedupe by name: vector/FAISS results win, graph fills the rest.
             seen = {r.get("name") for r in results if r.get("name")}

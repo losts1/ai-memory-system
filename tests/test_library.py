@@ -791,3 +791,45 @@ def test_memory_client_write_passes_provenance_to_write_fact():
     assert captured_topics[0]['provenance'] is prov
     assert captured_topics[0]['name'] == "Test Fact"
     assert captured_topics[0]['source_file'] == 'api'
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — Trust-filtered search
+# ---------------------------------------------------------------------------
+
+def test_search_vector_accepts_trust_filter():
+    """search_vector signature must include trust_filter parameter."""
+    import inspect
+    from ai_memory.search import search_vector
+    sig = inspect.signature(search_vector)
+    assert 'trust_filter' in sig.parameters
+
+
+def test_search_graph_accepts_trust_filter():
+    """search_graph signature must include trust_filter parameter."""
+    import inspect
+    from ai_memory.search import search_graph
+    sig = inspect.signature(search_graph)
+    assert 'trust_filter' in sig.parameters
+
+
+def test_memory_client_search_accepts_trust_filter():
+    """MemoryClient.search signature must include trust_filter parameter."""
+    import inspect
+    from ai_memory import MemoryClient
+    sig = inspect.signature(MemoryClient.search)
+    assert 'trust_filter' in sig.parameters
+
+
+def test_search_vector_empty_query_with_trust_filter_returns_empty():
+    """Empty query short-circuits before Ollama/Neo4j regardless of trust_filter."""
+    from ai_memory.search import search_vector
+    assert search_vector("", trust_filter="trusted") == []
+    assert search_vector("   ", trust_filter="suspicious") == []
+
+
+def test_search_graph_empty_query_with_trust_filter_returns_empty():
+    """Empty query short-circuits before Lucene/Neo4j regardless of trust_filter."""
+    from ai_memory.search import search_graph
+    assert search_graph("", trust_filter="trusted") == []
+    assert search_graph("\t", trust_filter="high_risk") == []
