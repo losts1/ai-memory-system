@@ -869,3 +869,14 @@ def test_search_vector_passes_trust_filter_to_session_run():
 
     assert "trust_filter" in captured_kwargs
     assert captured_kwargs["trust_filter"] == "trusted"
+
+
+def test_memory_client_search_trust_filter_with_faiss_raises():
+    """Combining use_embeddings=True with trust_filter must raise ValueError."""
+    import pytest
+    from unittest.mock import MagicMock
+    from ai_memory import MemoryClient
+    with MemoryClient() as client:
+        client._driver = MagicMock()
+        with pytest.raises(ValueError, match="trust_filter"):
+            client.search("query", use_embeddings=True, trust_filter="trusted")

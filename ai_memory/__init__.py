@@ -138,9 +138,16 @@ class MemoryClient:
             List of result dicts. Empty list if Ollama unavailable or query empty.
 
         Raises:
+            ValueError               — if trust_filter is set with use_embeddings=True.
             Neo4jConnectionError / Neo4jIndexNotFoundError / Neo4jQueryError —
             see ai_memory.exceptions.
         """
+        if use_embeddings and trust_filter is not None:
+            raise ValueError(
+                "trust_filter is incompatible with use_embeddings=True: "
+                "FAISS results have no provenance metadata. "
+                "Use the default Neo4j vector search (use_embeddings=False) instead."
+            )
         ws = self._workspace
         if use_embeddings:
             results = search_faiss(query, workspace=ws, max_results=max_results)
