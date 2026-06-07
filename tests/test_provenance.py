@@ -50,6 +50,7 @@ def test_from_dict_roundtrip():
     assert p2.risk_score == 30
     assert p2.signals == ["embedded_command"]
     assert p2.assistant == "Nova"
+    assert p2.written_at == p.written_at
 
 
 def test_from_dict_ignores_unknown_keys():
@@ -63,14 +64,13 @@ def test_from_dict_ignores_unknown_keys():
 
 
 def test_from_dict_missing_source_raises():
-    try:
+    import pytest
+    with pytest.raises(TypeError):
         Provenance.from_dict({"trust": "trusted"})
-        assert False, "expected TypeError"
-    except TypeError:
-        pass
 
 
 def test_written_at_auto_populated():
+    from datetime import datetime
     p = Provenance(source="memory")
-    assert p.written_at
-    assert "T" in p.written_at
+    dt = datetime.fromisoformat(p.written_at)
+    assert dt.tzinfo is not None  # must be timezone-aware (UTC)
