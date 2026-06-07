@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from ai_memory._config import get_driver
+from ai_memory.provenance import Provenance
 
 
 # -------------------------------------------------------------------------
@@ -179,6 +180,59 @@ def _strip_frontmatter(content: str) -> str:
     return _FRONTMATTER_RE.sub('', content, count=1)
 
 
+_PROV_BLOCK_RE = re.compile(
+    r'^provenance:\s*\n((?:[ \t]+\S[^\n]*\n?)*)',
+    re.MULTILINE,
+)
+
+
+def _parse_yaml_inline_list(val: str) -> list:
+    """Parse a YAML inline list '[a, b, c]' to a Python list of strings."""
+    val = val.strip()
+    if val.startswith('[') and val.endswith(']'):
+        return [x.strip().strip("'\"") for x in val[1:-1].split(',') if x.strip()]
+    return [val] if val else []
+
+
+def _parse_provenance_frontmatter(content: str) -> Optional[Provenance]:
+    """Extract the nested 'provenance:' block from YAML frontmatter.
+
+    Handles one level of indentation under 'provenance:' and parses
+    inline lists for the 'signals' field (e.g. signals: [a, b]).
+    Returns None if no frontmatter or no provenance block is found.
+    """
+    fm_match = _FRONTMATTER_RE.match(content)
+    if not fm_match:
+        return None
+    fm_body = fm_match.group(1)
+    prov_match = _PROV_BLOCK_RE.search(fm_body)
+    if not prov_match:
+        return None
+    raw: dict = {}
+    for line in prov_match.group(1).splitlines():
+        stripped = line.strip()
+        if not stripped or ':' not in stripped:
+            continue
+        key, _, val = stripped.partition(':')
+        key = key.strip()
+        val = val.strip()
+        if key == 'signals':
+            raw[key] = _parse_yaml_inline_list(val)
+        elif key == 'risk_score':
+            try:
+                raw[key] = int(val)
+            except ValueError:
+                pass
+        else:
+            raw[key] = val
+    if not raw.get('source'):
+        return None
+    try:
+        return Provenance.from_dict(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_bullets(body: str, max_points: int = 10) -> List[str]:
     """Extract markdown bullets ('- x', '* x', '1. x') as key_points.
 
@@ -247,12 +301,14 @@ def parse_frontmatter_topic(content: str, filepath: Path) -> List[dict]:
         first_para = body.split('\n\n', 1)[0].strip() if body else ''
         summary = first_para[:497] + '...' if len(first_para) > 500 else first_para
 
+    prov = _parse_provenance_frontmatter(content)
     return [{
         'name': name,
         'summary': summary,
         'key_points': _extract_bullets(body),
         'source_file': filepath.name,
         'created_at': _date_from_filepath(filepath),
+        'provenance': prov,
     }]
 
 

@@ -483,3 +483,91 @@ def test_neo4j_seed_contains_required_indexes():
             f"neo4j_seed.py is missing {expected!r} — "
             "add it to the indexes list or fulltext definition"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — Frontmatter provenance parsing
+# ---------------------------------------------------------------------------
+
+def test_parse_provenance_frontmatter_full():
+    """Nested provenance: block is extracted into a Provenance object."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test Fact
+provenance:
+  source: web_fetch
+  trust: suspicious
+  risk_score: 47
+  risk_band: medium
+  signals: [exfiltration, embedded_command]
+  original_source: https://example.com
+  assistant: Weft
+---
+Body content here.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.source == "web_fetch"
+    assert prov.trust == "suspicious"
+    assert prov.risk_score == 47
+    assert prov.risk_band == "medium"
+    assert "exfiltration" in prov.signals
+    assert prov.original_source == "https://example.com"
+    assert prov.assistant == "Weft"
+
+
+def test_parse_provenance_frontmatter_missing_returns_none():
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Plain Fact
+description: No provenance here.
+---
+Body.
+"""
+    assert _parse_provenance_frontmatter(content) is None
+
+
+def test_parse_provenance_frontmatter_no_frontmatter_returns_none():
+    from ai_memory.learn import _parse_provenance_frontmatter
+    assert _parse_provenance_frontmatter("Just a plain markdown file.\n") is None
+
+
+def test_parse_frontmatter_topic_attaches_provenance(tmp_path):
+    """parse_frontmatter_topic includes a Provenance object when block is present."""
+    from ai_memory.learn import parse_frontmatter_topic
+    from ai_memory.provenance import Provenance
+    content = """\
+---
+name: Provenance Test Fact
+description: A fact with provenance.
+provenance:
+  source: bash
+  trust: untrusted
+---
+- key point one
+"""
+    filepath = tmp_path / "2026-06-07.md"
+    topics = parse_frontmatter_topic(content, filepath)
+    assert len(topics) == 1
+    prov = topics[0].get("provenance")
+    assert isinstance(prov, Provenance)
+    assert prov.source == "bash"
+    assert prov.trust == "untrusted"
+
+
+def test_parse_frontmatter_topic_no_provenance_block(tmp_path):
+    """parse_frontmatter_topic still works when no provenance block is present."""
+    from ai_memory.learn import parse_frontmatter_topic
+    content = """\
+---
+name: Plain Fact
+description: No provenance.
+---
+- point
+"""
+    filepath = tmp_path / "2026-06-07.md"
+    topics = parse_frontmatter_topic(content, filepath)
+    assert len(topics) == 1
+    assert topics[0].get("provenance") is None
