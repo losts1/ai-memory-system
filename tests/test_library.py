@@ -871,6 +871,53 @@ def test_search_vector_passes_trust_filter_to_session_run():
     assert captured_kwargs["trust_filter"] == "trusted"
 
 
+def test_memory_client_search_trust_filter_empty_string_raises():
+    """trust_filter='' must raise ValueError — empty string silently returns no results."""
+    import pytest
+    from unittest.mock import MagicMock
+    from ai_memory import MemoryClient
+    with MemoryClient() as client:
+        client._driver = MagicMock()
+        with pytest.raises(ValueError, match="empty"):
+            client.search("query", trust_filter="")
+
+
+def test_memory_client_write_filters_empty_key_points():
+    """key_points with empty strings must be filtered before writing to Neo4j."""
+    from unittest.mock import MagicMock, patch
+    from ai_memory import MemoryClient
+
+    captured_topics = []
+
+    def fake_write_fact(topic, **kwargs):
+        captured_topics.append(topic)
+        return True
+
+    with patch('ai_memory._write_fact', side_effect=fake_write_fact):
+        with MemoryClient() as client:
+            client._driver = MagicMock()
+            client.write("Test", key_points=["valid point", "", "another valid"])
+
+    assert captured_topics[0]['key_points'] == ["valid point", "another valid"]
+
+
+def test_parse_provenance_frontmatter_empty_trust_skipped():
+    """Empty string trust value in frontmatter must not reach the Provenance object."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: web_fetch
+  trust:
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.trust == "unknown"
+
+
 def test_memory_client_search_trust_filter_with_faiss_raises():
     """Combining use_embeddings=True with trust_filter must raise ValueError."""
     import pytest

@@ -148,6 +148,8 @@ class MemoryClient:
                 "FAISS results have no provenance metadata. "
                 "Use the default Neo4j vector search (use_embeddings=False) instead."
             )
+        if trust_filter is not None and trust_filter == "":
+            raise ValueError("trust_filter cannot be an empty string; pass None to disable filtering.")
         ws = self._workspace
         if use_embeddings:
             results = search_faiss(query, workspace=ws, max_results=max_results)
@@ -352,7 +354,7 @@ class MemoryClient:
         topic = {
             'name': name,
             'summary': summary,
-            'key_points': key_points or [],
+            'key_points': [p for p in (key_points or []) if p],
             'source_file': 'api',
             'created_at': datetime.now(timezone.utc).isoformat(),
             'provenance': provenance,

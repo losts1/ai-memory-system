@@ -36,6 +36,12 @@ class Provenance:
     scan_version: str | None = None
     notes: str | None = None
 
+    def __post_init__(self) -> None:
+        if isinstance(self.signals, str):
+            self.signals = [self.signals] if self.signals else []
+        elif not isinstance(self.signals, list):
+            raise TypeError(f"signals must be list[str], got {type(self.signals).__name__}")
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict, omitting None values and empty lists."""
         return {

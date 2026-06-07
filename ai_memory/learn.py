@@ -14,6 +14,7 @@ Public API:
   sync_facts(topics, workspace, assistant)        — MERGE Fact nodes + Word index
   rebuild_graph(workspace)                        — rebuild RELATED_TO edges
 """
+import dataclasses
 import re
 import sys
 from datetime import datetime, timezone
@@ -232,7 +233,7 @@ def _parse_provenance_frontmatter(content: str) -> Optional[Provenance]:
                 raw[key] = int(val)
             except ValueError:
                 pass
-        else:
+        elif val:  # skip empty string values — they create untypeable trust/source states
             raw[key] = val
 
     if not raw.get('source'):
@@ -451,10 +452,14 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
             set_clause += ", f.assistant = $assistant"
             params['assistant'] = assistant
         if topic.get('provenance') is not None:
-            for k, v in topic['provenance'].to_dict().items():
-                param_key = f'prov_{k}'
-                set_clause += f', f.provenance_{k} = ${param_key}'
-                params[param_key] = v
+            # Iterate ALL known fields (not just non-None ones from to_dict) so that
+            # re-writing a Fact with updated provenance clears previously set fields.
+            # e.g. risk_score going from 47 → None must write NULL, not leave 47.
+            prov_dict = topic['provenance'].to_dict()
+            for f in dataclasses.fields(topic['provenance']):
+                param_key = f'prov_{f.name}'
+                set_clause += f', f.provenance_{f.name} = ${param_key}'
+                params[param_key] = prov_dict.get(f.name)  # None for cleared fields
         result = tx.run(f"""
             MERGE (f:Fact {{name: $name}})
             {set_clause}
