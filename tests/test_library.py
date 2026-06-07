@@ -768,3 +768,26 @@ def test_memory_client_write_returns_bool_without_neo4j(tmp_path):
             provenance=Provenance(source="api", trust="trusted"),
         )
     assert isinstance(result, bool)
+
+
+def test_memory_client_write_passes_provenance_to_write_fact():
+    """provenance kwarg must reach the topic dict passed to _write_fact."""
+    from unittest.mock import MagicMock, patch
+    from ai_memory import MemoryClient, Provenance
+
+    prov = Provenance(source="api", trust="trusted")
+    captured_topics = []
+
+    def fake_write_fact(topic, **kwargs):
+        captured_topics.append(topic)
+        return True
+
+    with patch('ai_memory._write_fact', side_effect=fake_write_fact):
+        with MemoryClient() as client:
+            client._driver = MagicMock()  # prevent real Neo4j driver creation
+            client.write("Test Fact", summary="s", provenance=prov)
+
+    assert len(captured_topics) == 1
+    assert captured_topics[0]['provenance'] is prov
+    assert captured_topics[0]['name'] == "Test Fact"
+    assert captured_topics[0]['source_file'] == 'api'
