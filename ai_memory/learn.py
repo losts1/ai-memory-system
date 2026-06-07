@@ -400,6 +400,35 @@ def _post_sync_tx(tx, max_df_ratio: float = 0.1, min_shared: int = 2) -> None:
 # Neo4j write functions
 # -------------------------------------------------------------------------
 
+def write_fact(
+    topic: dict,
+    *,
+    assistant: str | None = None,
+    driver=None,
+    workspace=None,
+) -> bool:
+    """Write a single Fact node to Neo4j.
+
+    ``topic`` must have keys: name, summary, key_points, source_file, created_at.
+    An optional ``provenance`` key (Provenance instance) writes provenance_* props.
+
+    Returns True on success, False on any error. Supply an existing ``driver``
+    (e.g. from MemoryClient) to avoid per-call handshake cost.
+    """
+    owns_driver = driver is None
+    if owns_driver:
+        driver = get_driver(workspace)
+    try:
+        with driver.session() as session:
+            result = session.execute_write(_sync_fact_tx, topic, assistant)
+            return bool(result)
+    except Exception:
+        return False
+    finally:
+        if owns_driver and driver is not None:
+            driver.close()
+
+
 def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
     """Transaction: MERGE a Fact node + Word index edges."""
     try:
@@ -421,6 +450,11 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
         if assistant:
             set_clause += ", f.assistant = $assistant"
             params['assistant'] = assistant
+        if topic.get('provenance') is not None:
+            for k, v in topic['provenance'].to_dict().items():
+                param_key = f'prov_{k}'
+                set_clause += f', f.provenance_{k} = ${param_key}'
+                params[param_key] = v
         result = tx.run(f"""
             MERGE (f:Fact {{name: $name}})
             {set_clause}

@@ -624,3 +624,79 @@ Body.
     prov = _parse_provenance_frontmatter(content)
     assert prov is not None
     assert prov.risk_score is None  # silently dropped, not corrupted
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — Neo4j provenance write
+# ---------------------------------------------------------------------------
+
+def test_sync_fact_tx_writes_provenance_props():
+    """_sync_fact_tx must pass provenance_* kwargs to tx.run when provenance is set."""
+    from unittest.mock import MagicMock
+    from ai_memory.learn import _sync_fact_tx
+    from ai_memory.provenance import Provenance
+
+    captured_params = {}
+
+    def fake_run(cypher, **params):
+        captured_params.update(params)
+        mock_result = MagicMock()
+        mock_result.single.return_value = {"name": "Test"}
+        return mock_result
+
+    tx = MagicMock()
+    tx.run.side_effect = fake_run
+
+    topic = {
+        'name': 'Test Fact',
+        'summary': 'A test.',
+        'key_points': ['point one'],
+        'source_file': 'test.md',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': Provenance(
+            source='web_fetch',
+            trust='suspicious',
+            risk_score=47,
+            risk_band='medium',
+            signals=['exfiltration'],
+        ),
+    }
+    _sync_fact_tx(tx, topic)
+
+    assert captured_params.get('prov_source') == 'web_fetch'
+    assert captured_params.get('prov_trust') == 'suspicious'
+    assert captured_params.get('prov_risk_score') == 47
+    assert captured_params.get('prov_signals') == ['exfiltration']
+
+
+def test_sync_fact_tx_no_provenance_no_prov_params():
+    """When provenance is None, no prov_* params are passed to tx.run."""
+    from unittest.mock import MagicMock
+    from ai_memory.learn import _sync_fact_tx
+
+    captured_params = {}
+
+    def fake_run(cypher, **params):
+        captured_params.update(params)
+        mock_result = MagicMock()
+        mock_result.single.return_value = {"name": "Test"}
+        return mock_result
+
+    tx = MagicMock()
+    tx.run.side_effect = fake_run
+
+    topic = {
+        'name': 'Plain Fact',
+        'summary': 'No provenance.',
+        'key_points': [],
+        'source_file': 'test.md',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': None,
+    }
+    _sync_fact_tx(tx, topic)
+    assert not any(k.startswith('prov_') for k in captured_params)
+
+
+def test_write_fact_importable():
+    from ai_memory.learn import write_fact
+    assert callable(write_fact)
