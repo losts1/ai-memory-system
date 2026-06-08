@@ -127,16 +127,10 @@ def ensure_assistant_node(driver, assistant_id: str, name: str, assistant_type: 
 
 
 def count_nodes_needing_backfill(driver, label: str) -> int:
-    """Count nodes that will actually be tagged by the wet run.
-
-    Mirrors the stage-1 filter (`n.id IS NOT NULL`) so dry-run totals match
-    wet-run totals exactly. Use `count_skipped_null_id` for nodes that lack
-    an `id` and are therefore unreachable by stage-2's id-keyed UNWIND
-    (e.g. v1.2 Facts created only via `ai_memory.learn`).
-    """
+    """Count untagged nodes of this label (all nodes, regardless of id property)."""
     query = f"""
         MATCH (n:{label})
-        WHERE n.assistant IS NULL AND n.id IS NOT NULL
+        WHERE n.assistant IS NULL
         RETURN count(n) AS c
     """
     try:
@@ -144,23 +138,8 @@ def count_nodes_needing_backfill(driver, label: str) -> int:
             rec = session.run(query).single()
             return rec["c"] if rec else 0
     except (ClientError, DatabaseError):
-        # Label not present in this graph (pre-5 Neo4j only) or schema error.
+        # Label not present in this graph or schema error.
         # Real connection failures (ServiceUnavailable) propagate.
-        return 0
-
-
-def count_skipped_null_id(driver, label: str) -> int:
-    """Count untagged nodes that stage-1 will skip because `n.id` is null."""
-    query = f"""
-        MATCH (n:{label})
-        WHERE n.assistant IS NULL AND n.id IS NULL
-        RETURN count(n) AS c
-    """
-    try:
-        with driver.session() as session:
-            rec = session.run(query).single()
-            return rec["c"] if rec else 0
-    except (ClientError, DatabaseError):
         return 0
 
 
@@ -179,13 +158,6 @@ def backfill_label(
     MATCH ... SET transactions.
     """
     total_to_do = count_nodes_needing_backfill(driver, label)
-    skipped_null_id = count_skipped_null_id(driver, label)
-
-    if skipped_null_id > 0:
-        logger.info(
-            f"  {label}: {skipped_null_id} untagged nodes have no `id` and "
-            f"will be skipped (e.g. v1.2 Facts from ai_memory.learn)"
-        )
 
     if total_to_do == 0:
         logger.info(f"  {label}: already fully tagged (0 nodes need work)")
@@ -199,38 +171,35 @@ def backfill_label(
 
     updated = 0
     while True:
-        # Stage 1: collect IDs (small, safe)
+        # Stage 1: collect elementIds (works for all nodes, including id-less Facts)
         id_query = f"""
             MATCH (n:{label})
             WHERE n.assistant IS NULL
-              AND n.id IS NOT NULL
-            RETURN n.id AS id
+            RETURN elementId(n) AS eid
             LIMIT $batch
         """
         with driver.session() as session:
-            ids = [r["id"] for r in session.run(id_query, batch=batch_size)]
+            eids = [r["eid"] for r in session.run(id_query, batch=batch_size)]
 
-        if not ids:
+        if not eids:
             break
 
-        # Stage 2: tight UNWIND + SET. Label-scoped MATCH prevents id
-        # collisions across labels from tagging the wrong node (same fix
-        # the Phase 2 QA round applied to create_q below).
-        update_query = f"""
-            UNWIND $ids AS nid
-            MATCH (n:{label}) WHERE n.id = nid AND n.assistant IS NULL
+        # Stage 2: UNWIND + SET keyed on elementId (globally unique, no label collision).
+        update_query = """
+            UNWIND $eids AS eid
+            MATCH (n) WHERE elementId(n) = eid AND n.assistant IS NULL
             SET n.assistant = $assistant
             RETURN count(n) AS done
         """
         with driver.session() as session:
-            result = session.run(update_query, ids=ids, assistant=assistant_id)
+            result = session.run(update_query, eids=eids, assistant=assistant_id)
             done = result.single()["done"]
             updated += done
 
         if updated % 100 == 0 or updated >= total_to_do:
             logger.info(f"    ... {updated}/{total_to_do} {label} nodes tagged")
 
-        if len(ids) < batch_size:
+        if len(eids) < batch_size:
             break
 
     logger.info(f"    → {updated} {label} nodes tagged with assistant='{assistant_id}'")
@@ -282,21 +251,20 @@ def create_created_by_relationships(
                     MATCH (a:Assistant {{id: $aid}})
                     MATCH (n:{label} {{assistant: $aid}})
                     WHERE NOT (n)-[:CREATED_BY]->(a)
-                    RETURN n.id AS nid, a.id AS aid
+                    RETURN elementId(n) AS neid, a.id AS aid
                     LIMIT $batch
                 """
                 with driver.session() as s:
-                    pairs = [(r["nid"], r["aid"]) for r in s.run(pair_q, aid=aid, batch=batch_size)]
+                    pairs = [(r["neid"], r["aid"]) for r in s.run(pair_q, aid=aid, batch=batch_size)]
 
                 if not pairs:
                     break
 
-                create_q = f"""
+                create_q = """
                     UNWIND $pairs AS p
-                    MATCH (a:Assistant {{id: p[1]}})
-                    MATCH (n:{label} {{id: p[0]}})
-                    WHERE NOT (n)-[:CREATED_BY]->(a)
-                    CREATE (n)-[:CREATED_BY]->(a)
+                    MATCH (a:Assistant {id: p[1]})
+                    MATCH (n) WHERE elementId(n) = p[0]
+                    MERGE (n)-[:CREATED_BY]->(a)
                     RETURN count(*) AS done
                 """
                 with driver.session() as s:

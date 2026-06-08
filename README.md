@@ -61,6 +61,12 @@ See the full guides:
 - Scripts remain as standalone CLI entry points (no breaking changes)
 - 35 tests covering library + CLI smoke tests
 
+**Phase 4 highlights:**
+- `ai_memory/learn.py` — full learn pipeline as importable library (`parse_learned_topics`, `sync_facts`, `rebuild_graph`)
+- `MemoryClient.learn(days, *, assistant)` — high-level facade for session ingestion (scans `memory/*.md`, syncs as Fact nodes)
+- `examples/` — concrete RLM pipeline demos (`01_lazy_loading_session.py`, `02_learn_and_traverse.py`)
+- `docs/RLM.md` — Library API reference covering all RLM modules
+
 **Phase 3 Quickstart (Library)**
 
 ```python
@@ -69,6 +75,8 @@ from ai_memory import MemoryClient
 with MemoryClient() as client:
     results = client.search("transformer attention", assistant="Weft")
     facts   = client.traverse("Attention Is All You Need", depth=2)
+    # Ingest the last 30 days of memory/*.md notes into Neo4j
+    synced  = client.learn(days=30, assistant="Weft")
 ```
 
 See [README — Library section](#library-phase-3) and [MIGRATION.md](./MIGRATION.md) for full details.
@@ -269,6 +277,9 @@ After `pip install -e .`, the `ai_memory` package is importable:
 from ai_memory import MemoryClient
 
 with MemoryClient() as client:
+    # Ingest the last 30 days of memory/*.md notes as Fact nodes (Phase 4)
+    synced = client.learn(days=30, assistant="Weft")
+
     # Semantic search (requires Neo4j + Ollama)
     results = client.search("transformer attention")
     results = client.search("inventory management", assistant="Weft")
@@ -283,6 +294,7 @@ with MemoryClient() as client:
 from ai_memory.search import search_vector, search_files
 from ai_memory.graph import traverse, trace_parameter, graph_stats
 from ai_memory.state import MemoryStateManager
+from ai_memory.learn import parse_learned_topics, sync_facts, rebuild_graph
 ```
 
 The library is a thin extraction of the script logic — same behaviour, importable API. Scripts remain as standalone CLI entry points.

@@ -24,7 +24,7 @@ from ai_memory.metadata import apply_fields_filter, apply_metadata_only
 
 _MEANINGFUL_FIELDS = frozenset({
     "source", "name", "teaser", "summary", "content",
-    "relationships", "key_points",
+    "relationships", "related_count", "key_points",
 })
 
 

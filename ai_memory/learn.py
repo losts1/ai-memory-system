@@ -14,6 +14,7 @@ Public API:
   sync_facts(topics, workspace, assistant)        — MERGE Fact nodes + Word index
   rebuild_graph(workspace)                        — rebuild RELATED_TO edges
 """
+import dataclasses
 import re
 import sys
 from datetime import datetime, timezone
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from ai_memory._config import get_driver
+from ai_memory.provenance import Provenance
 
 
 # -------------------------------------------------------------------------
@@ -115,20 +117,31 @@ def _parse_key_points_and_summary(body: str):
     key_points = []
     summary_lines = []
     in_list = False
+    in_fence = False
+    fence_marker = None
     for line in lines:
-        line = line.strip()
-        if not line:
+        stripped = line.strip()
+        if stripped.startswith(('```', '~~~')):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence = True
+                fence_marker = marker
+            elif fence_marker == marker:
+                in_fence = False
+                fence_marker = None
             continue
-        if line.startswith('-') or re.match(r'^\d+\.', line):
-            point = re.sub(r'^[-\d\.]+\s*', '', line).strip()
+        if in_fence or not stripped:
+            continue
+        if stripped.startswith('-') or re.match(r'^\d+\.\s', stripped):
+            point = re.sub(r'^[-\d\.]+\s*', '', stripped).strip()
             if point:
                 key_points.append(point)
             in_list = True
-        elif in_list and not line.startswith('#') and not line.startswith('**'):
-            if not line.startswith('|'):
-                summary_lines.append(line)
+        elif in_list and not stripped.startswith('#') and not stripped.startswith('**'):
+            if not stripped.startswith('|'):
+                summary_lines.append(stripped)
         else:
-            summary_lines.append(line)
+            summary_lines.append(stripped)
             in_list = False
     summary = ' '.join(summary_lines[:3])
     if len(summary) > 500:
@@ -166,6 +179,69 @@ def _parse_yaml_frontmatter(content: str) -> Optional[dict]:
 
 def _strip_frontmatter(content: str) -> str:
     return _FRONTMATTER_RE.sub('', content, count=1)
+
+
+def _parse_yaml_inline_list(val: str) -> list:
+    """Parse a YAML inline list '[a, b, c]' to a Python list of strings."""
+    val = val.strip()
+    if val.startswith('[') and val.endswith(']'):
+        return [x.strip().strip("'\"") for x in val[1:-1].split(',') if x.strip()]
+    return [val] if val else []
+
+
+def _parse_provenance_frontmatter(content: str) -> Optional[Provenance]:
+    """Extract the nested 'provenance:' block from YAML frontmatter.
+
+    Handles one level of indentation under 'provenance:' and parses
+    inline lists for the 'signals' field (e.g. signals: [a, b]).
+    Tolerates blank lines inside the provenance block.
+    Returns None if no frontmatter or no provenance block is found.
+    """
+    fm_match = _FRONTMATTER_RE.match(content)
+    if not fm_match:
+        return None
+    fm_body = fm_match.group(1)
+
+    # Collect indented lines that follow a bare 'provenance:' line,
+    # tolerating blank/whitespace-only lines within the block.
+    prov_lines: list = []
+    in_prov = False
+    for line in fm_body.splitlines():
+        if line.strip() == 'provenance:':
+            in_prov = True
+            continue
+        if in_prov:
+            if line and line[0] not in (' ', '\t'):
+                break  # reached a new top-level key
+            prov_lines.append(line)
+
+    if not prov_lines:
+        return None
+
+    raw: dict = {}
+    for line in prov_lines:
+        stripped = line.strip()
+        if not stripped or ':' not in stripped:
+            continue
+        key, _, val = stripped.partition(':')
+        key = key.strip()
+        val = val.strip()
+        if key == 'signals':
+            raw[key] = _parse_yaml_inline_list(val)
+        elif key == 'risk_score':
+            try:
+                raw[key] = int(val)
+            except ValueError:
+                pass
+        elif val:  # skip empty string values — they create untypeable trust/source states
+            raw[key] = val
+
+    if not raw.get('source'):
+        return None
+    try:
+        return Provenance.from_dict(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_bullets(body: str, max_points: int = 10) -> List[str]:
@@ -236,12 +312,14 @@ def parse_frontmatter_topic(content: str, filepath: Path) -> List[dict]:
         first_para = body.split('\n\n', 1)[0].strip() if body else ''
         summary = first_para[:497] + '...' if len(first_para) > 500 else first_para
 
+    prov = _parse_provenance_frontmatter(content)
     return [{
         'name': name,
         'summary': summary,
         'key_points': _extract_bullets(body),
         'source_file': filepath.name,
         'created_at': _date_from_filepath(filepath),
+        'provenance': prov,
     }]
 
 
@@ -313,9 +391,44 @@ def cleanup_orphaned_words(tx) -> None:
     tx.run("MATCH (w:Word) WHERE NOT (()-[:HAS_WORD]->(w)) DELETE w")
 
 
+def _post_sync_tx(tx, max_df_ratio: float = 0.1, min_shared: int = 2) -> None:
+    """Combined maintenance transaction: rebuild RELATED_TO + clean up orphaned Words."""
+    link_related_facts(tx, max_df_ratio=max_df_ratio, min_shared=min_shared)
+    cleanup_orphaned_words(tx)
+
+
 # -------------------------------------------------------------------------
 # Neo4j write functions
 # -------------------------------------------------------------------------
+
+def write_fact(
+    topic: dict,
+    *,
+    assistant: str | None = None,
+    driver=None,
+    workspace=None,
+) -> bool:
+    """Write a single Fact node to Neo4j.
+
+    ``topic`` must have keys: name, summary, key_points, source_file, created_at.
+    An optional ``provenance`` key (Provenance instance) writes provenance_* props.
+
+    Returns True on success, False on any error (including unreachable Neo4j).
+    Never raises.
+    """
+    owns_driver = driver is None
+    try:
+        if owns_driver:
+            driver = get_driver(workspace)
+        with driver.session() as session:
+            result = session.execute_write(_sync_fact_tx, topic, assistant)
+            return bool(result)
+    except Exception:
+        return False
+    finally:
+        if owns_driver and driver is not None:
+            driver.close()
+
 
 def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
     """Transaction: MERGE a Fact node + Word index edges."""
@@ -338,6 +451,15 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
         if assistant:
             set_clause += ", f.assistant = $assistant"
             params['assistant'] = assistant
+        if topic.get('provenance') is not None:
+            # Iterate ALL known fields (not just non-None ones from to_dict) so that
+            # re-writing a Fact with updated provenance clears previously set fields.
+            # e.g. risk_score going from 47 → None must write NULL, not leave 47.
+            prov_dict = topic['provenance'].to_dict()
+            for f in dataclasses.fields(topic['provenance']):
+                param_key = f'prov_{f.name}'
+                set_clause += f', f.provenance_{f.name} = ${param_key}'
+                params[param_key] = prov_dict.get(f.name)  # None for cleared fields
         result = tx.run(f"""
             MERGE (f:Fact {{name: $name}})
             {set_clause}
@@ -395,8 +517,7 @@ def sync_facts(
             for topic in topics:
                 if session.execute_write(_sync_fact_tx, topic, assistant):
                     synced += 1
-            session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
-            session.execute_write(cleanup_orphaned_words)
+            session.execute_write(_post_sync_tx, max_df_ratio=0.1, min_shared=2)
         return synced
     finally:
         if driver is not None:
@@ -412,8 +533,7 @@ def rebuild_graph(*, workspace=None) -> int:
     try:
         driver = get_driver(workspace)
         with driver.session() as session:
-            session.execute_write(link_related_facts, max_df_ratio=0.1, min_shared=2)
-            session.execute_write(cleanup_orphaned_words)
+            session.execute_write(_post_sync_tx, max_df_ratio=0.1, min_shared=2)
             result = session.run("MATCH ()-[r:RELATED_TO]->() RETURN count(r) AS cnt")
             rec = result.single()
             return rec['cnt'] if rec else 0

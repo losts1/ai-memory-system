@@ -255,7 +255,8 @@ def test_memory_client_instantiates(tmp_path):
 
 def test_memory_client_has_expected_methods():
     from ai_memory import MemoryClient
-    for method in ['search', 'traverse', 'trace_parameter', 'state', 'close']:
+    for method in ['search', 'traverse', 'trace_parameter', 'graph_stats',
+                   'state', 'learn', 'close']:
         assert hasattr(MemoryClient, method), f"Missing method: {method}"
 
 
@@ -347,6 +348,49 @@ def test_validate_schema_signature():
     assert "vector_index" in sig.parameters
 
 
+def test_config_expected_constraints_matches_verify_schema():
+    """_config.py EXPECTED_CONSTRAINTS must be consistent with scripts/verify_schema.py.
+    Mirrors the indexes parity guard — constraints have two separate hardcoded sets."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from ai_memory._config import EXPECTED_CONSTRAINTS as config_constraints
+    from verify_schema import EXPECTED_CONSTRAINTS as vs_constraints
+    assert set(config_constraints) == vs_constraints, (
+        f"_config.py EXPECTED_CONSTRAINTS diverged from verify_schema.py:\n"
+        f"  only in _config:      {set(config_constraints) - vs_constraints}\n"
+        f"  only in verify_schema: {vs_constraints - set(config_constraints)}"
+    )
+
+
+def test_config_expected_indexes_matches_verify_schema():
+    """_config.py EXPECTED_INDEXES must be consistent with scripts/verify_schema.py.
+    Two schema validators diverged; this is the regression guard."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from ai_memory._config import EXPECTED_INDEXES as config_indexes
+    from verify_schema import EXPECTED_INDEXES as vs_indexes
+    assert set(config_indexes) == vs_indexes, (
+        f"_config.py EXPECTED_INDEXES diverged from verify_schema.py:\n"
+        f"  only in _config:      {set(config_indexes) - vs_indexes}\n"
+        f"  only in verify_schema: {vs_indexes - set(config_indexes)}"
+    )
+
+
+def test_config_expected_fulltext_props_matches_verify_schema():
+    """_config.py EXPECTED_FULLTEXT_PROPS must match verify_schema.py."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from ai_memory._config import EXPECTED_FULLTEXT_PROPS as config_props
+    from verify_schema import EXPECTED_FULLTEXT_PROPS as vs_props
+    assert config_props == vs_props, (
+        f"_config.py EXPECTED_FULLTEXT_PROPS {config_props} != "
+        f"verify_schema.py {vs_props}"
+    )
+
+
 def test_search_graph_cypher_uses_related_to_or_learned_in():
     """Issue #N3: search_graph must walk RELATED_TO|LEARNED_IN, not LEARNED_IN
     alone. Inspect the function's source as a regression guard."""
@@ -357,6 +401,51 @@ def test_search_graph_cypher_uses_related_to_or_learned_in():
         "search_graph must traverse both relationship types"
     assert "[:LEARNED_IN]->" not in src, \
         "the lone LEARNED_IN traversal was the v1.3.1 bug; should be replaced"
+
+
+def test_search_graph_uses_configurable_fulltext_index():
+    """search_graph must use $fulltext_index Cypher param (from NEO4J_FULLTEXT_INDEX env)
+    rather than passing the index name as a hardcoded string literal to queryNodes."""
+    import inspect
+    from ai_memory.search import search_graph
+    src = inspect.getsource(search_graph)
+    assert "$fulltext_index" in src, \
+        "search_graph must pass $fulltext_index as a parameterised Cypher argument"
+    assert "queryNodes('fact_content'" not in src, \
+        "search_graph must not hardcode 'fact_content' as the queryNodes argument"
+
+
+def test_search_vector_cypher_omits_node_id():
+    """node.id is not written by learn.py and is unused in result construction.
+    Fetching it adds payload with no benefit — regression guard for its removal."""
+    import inspect
+    from ai_memory.search import search_vector
+    src = inspect.getsource(search_vector)
+    assert "node.id AS id" not in src, \
+        "search_vector must not fetch unused node.id"
+
+
+def test_graph_functions_accept_driver_kwarg():
+    """graph.traverse, graph.trace_parameter, graph.graph_stats must accept driver=
+    so MemoryClient can pass its cached connection (avoids ~28ms handshake per call)."""
+    import inspect
+    from ai_memory.graph import traverse, trace_parameter, graph_stats
+    for fn in (traverse, trace_parameter, graph_stats):
+        params = inspect.signature(fn).parameters
+        assert "driver" in params, f"{fn.__name__} missing driver= parameter"
+
+
+def test_prerequisite_of_removed_from_allowed_rels():
+    """PREREQUISITE_OF and HAS_WORD were removed from _ALLOWED_RELS:
+    PREREQUISITE_OF — no edges exist; HAS_WORD — depth=1 yields Word nodes
+    (not :Fact), depth=2 is an expensive RELATED_TO equivalent with undefined semantics."""
+    from ai_memory.graph import _ALLOWED_RELS
+    assert "PREREQUISITE_OF" not in _ALLOWED_RELS, \
+        "PREREQUISITE_OF was dead code — it must not appear in _ALLOWED_RELS"
+    assert "HAS_WORD" not in _ALLOWED_RELS, \
+        "HAS_WORD has confusing Fact-traversal semantics — it must not appear in _ALLOWED_RELS"
+    assert "RELATED_TO" in _ALLOWED_RELS
+    assert "SHARES_PARAMETER" in _ALLOWED_RELS  # reserved for RLM tracing
 
 
 def test_search_functions_accept_driver_kwarg():
@@ -374,3 +463,467 @@ def test_get_query_timeout_returns_float():
     t = get_query_timeout()
     assert isinstance(t, float)
     assert 1.0 <= t <= 600.0
+
+
+def test_neo4j_seed_contains_required_indexes():
+    """Regression: seed script must define the full required index set.
+
+    Source-inspection test — no Neo4j connection required.
+    Catches the case where someone removes an index from neo4j_seed.py
+    without updating verify_schema.py's expected set.
+    """
+    from pathlib import Path
+    seed_src = (Path(__file__).parent.parent / "scripts" / "neo4j_seed.py").read_text()
+    for expected in [
+        "fact_created_at_idx",   # temporal range queries on Fact.created_at
+        "fact_source_file_idx",  # source_file lookups (written by learn.py)
+        "n.summary",             # fulltext index must cover Fact.summary
+    ]:
+        assert expected in seed_src, (
+            f"neo4j_seed.py is missing {expected!r} — "
+            "add it to the indexes list or fulltext definition"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — Frontmatter provenance parsing
+# ---------------------------------------------------------------------------
+
+def test_parse_provenance_frontmatter_full():
+    """Nested provenance: block is extracted into a Provenance object."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test Fact
+provenance:
+  source: web_fetch
+  trust: suspicious
+  risk_score: 47
+  risk_band: medium
+  signals: [exfiltration, embedded_command]
+  original_source: https://example.com
+  assistant: Weft
+---
+Body content here.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.source == "web_fetch"
+    assert prov.trust == "suspicious"
+    assert prov.risk_score == 47
+    assert prov.risk_band == "medium"
+    assert "exfiltration" in prov.signals
+    assert prov.original_source == "https://example.com"
+    assert prov.assistant == "Weft"
+
+
+def test_parse_provenance_frontmatter_missing_returns_none():
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Plain Fact
+description: No provenance here.
+---
+Body.
+"""
+    assert _parse_provenance_frontmatter(content) is None
+
+
+def test_parse_provenance_frontmatter_no_frontmatter_returns_none():
+    from ai_memory.learn import _parse_provenance_frontmatter
+    assert _parse_provenance_frontmatter("Just a plain markdown file.\n") is None
+
+
+def test_parse_frontmatter_topic_attaches_provenance(tmp_path):
+    """parse_frontmatter_topic includes a Provenance object when block is present."""
+    from ai_memory.learn import parse_frontmatter_topic
+    from ai_memory.provenance import Provenance
+    content = """\
+---
+name: Provenance Test Fact
+description: A fact with provenance.
+provenance:
+  source: bash
+  trust: untrusted
+---
+- key point one
+"""
+    filepath = tmp_path / "2026-06-07.md"
+    topics = parse_frontmatter_topic(content, filepath)
+    assert len(topics) == 1
+    prov = topics[0].get("provenance")
+    assert isinstance(prov, Provenance)
+    assert prov.source == "bash"
+    assert prov.trust == "untrusted"
+
+
+def test_parse_frontmatter_topic_no_provenance_block(tmp_path):
+    """parse_frontmatter_topic still works when no provenance block is present."""
+    from ai_memory.learn import parse_frontmatter_topic
+    content = """\
+---
+name: Plain Fact
+description: No provenance.
+---
+- point
+"""
+    filepath = tmp_path / "2026-06-07.md"
+    topics = parse_frontmatter_topic(content, filepath)
+    assert len(topics) == 1
+    assert topics[0].get("provenance") is None
+
+
+def test_parse_provenance_frontmatter_blank_line_in_block():
+    """Blank line inside provenance block must not truncate remaining fields."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: web_fetch
+
+  trust: suspicious
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.source == "web_fetch"
+    assert prov.trust == "suspicious"
+
+
+def test_parse_provenance_frontmatter_url_with_port():
+    """original_source with a port number (colon in value) must round-trip intact."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: web_fetch
+  original_source: https://example.com:8080/path
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.original_source == "https://example.com:8080/path"
+
+
+def test_parse_provenance_frontmatter_float_risk_score_silently_dropped():
+    """A float string for risk_score is silently dropped (int() raises ValueError)."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: api
+  risk_score: 3.7
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.risk_score is None  # silently dropped, not corrupted
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — Neo4j provenance write
+# ---------------------------------------------------------------------------
+
+def test_sync_fact_tx_writes_provenance_props():
+    """_sync_fact_tx must pass provenance_* kwargs to tx.run when provenance is set."""
+    from unittest.mock import MagicMock
+    from ai_memory.learn import _sync_fact_tx
+    from ai_memory.provenance import Provenance
+
+    captured_params = {}
+
+    def fake_run(cypher, **params):
+        captured_params.update(params)
+        mock_result = MagicMock()
+        mock_result.single.return_value = {"name": "Test"}
+        return mock_result
+
+    tx = MagicMock()
+    tx.run.side_effect = fake_run
+
+    topic = {
+        'name': 'Test Fact',
+        'summary': 'A test.',
+        'key_points': ['point one'],
+        'source_file': 'test.md',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': Provenance(
+            source='web_fetch',
+            trust='suspicious',
+            risk_score=47,
+            risk_band='medium',
+            signals=['exfiltration'],
+        ),
+    }
+    _sync_fact_tx(tx, topic)
+
+    assert captured_params.get('prov_source') == 'web_fetch'
+    assert captured_params.get('prov_trust') == 'suspicious'
+    assert captured_params.get('prov_risk_score') == 47
+    assert captured_params.get('prov_risk_band') == 'medium'
+    assert captured_params.get('prov_signals') == ['exfiltration']
+
+
+def test_sync_fact_tx_no_provenance_no_prov_params():
+    """When provenance is None, no prov_* params are passed to tx.run."""
+    from unittest.mock import MagicMock
+    from ai_memory.learn import _sync_fact_tx
+
+    captured_params = {}
+
+    def fake_run(cypher, **params):
+        captured_params.update(params)
+        mock_result = MagicMock()
+        mock_result.single.return_value = {"name": "Test"}
+        return mock_result
+
+    tx = MagicMock()
+    tx.run.side_effect = fake_run
+
+    topic = {
+        'name': 'Plain Fact',
+        'summary': 'No provenance.',
+        'key_points': [],
+        'source_file': 'test.md',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': None,
+    }
+    _sync_fact_tx(tx, topic)
+    assert not any(k.startswith('prov_') for k in captured_params)
+
+
+def test_write_fact_returns_false_on_driver_failure(monkeypatch, tmp_path):
+    """write_fact must return False (not raise) when Neo4j is unreachable."""
+    monkeypatch.setenv('NEO4J_URI', 'bolt://127.0.0.1:1')  # nothing listens on port 1
+    monkeypatch.setenv('NEO4J_PASSWORD', 'test')
+    from ai_memory.learn import write_fact
+    topic = {
+        'name': 'Test',
+        'summary': 'test',
+        'key_points': [],
+        'source_file': 'api',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': None,
+    }
+    # get_driver raises Neo4jConnectionError — write_fact must catch it and return False
+    result = write_fact(topic, workspace=tmp_path)
+    assert result is False
+
+
+def test_write_fact_does_not_close_supplied_driver():
+    """write_fact must not close a driver supplied by the caller."""
+    from unittest.mock import MagicMock
+    from ai_memory.learn import write_fact
+
+    mock_driver = MagicMock()
+    mock_session = MagicMock()
+    mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
+    mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+    mock_session.execute_write.return_value = True
+
+    topic = {
+        'name': 'Test',
+        'summary': 'test',
+        'key_points': [],
+        'source_file': 'api',
+        'created_at': '2026-06-07T00:00:00Z',
+        'provenance': None,
+    }
+    result = write_fact(topic, driver=mock_driver)
+    assert result is True
+    mock_driver.close.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — MemoryClient.write() and Provenance export
+# ---------------------------------------------------------------------------
+
+def test_memory_client_has_write_method():
+    from ai_memory import MemoryClient
+    assert hasattr(MemoryClient, 'write')
+    assert callable(MemoryClient.write)
+
+
+def test_provenance_importable_from_ai_memory():
+    from ai_memory import Provenance
+    assert callable(Provenance)
+
+
+def test_memory_client_write_returns_bool_without_neo4j(tmp_path):
+    """write() must return a bool without raising when Neo4j is unreachable."""
+    import os
+    os.environ.setdefault('NEO4J_PASSWORD', 'test')
+    from ai_memory import MemoryClient, Provenance
+    with MemoryClient(workspace=tmp_path) as client:
+        result = client.write(
+            "Test Fact",
+            summary="A test fact.",
+            key_points=["point one"],
+            provenance=Provenance(source="api", trust="trusted"),
+        )
+    assert isinstance(result, bool)
+
+
+def test_memory_client_write_passes_provenance_to_write_fact():
+    """provenance kwarg must reach the topic dict passed to _write_fact."""
+    from unittest.mock import MagicMock, patch
+    from ai_memory import MemoryClient, Provenance
+
+    prov = Provenance(source="api", trust="trusted")
+    captured_topics = []
+
+    def fake_write_fact(topic, **kwargs):
+        captured_topics.append(topic)
+        return True
+
+    with patch('ai_memory._write_fact', side_effect=fake_write_fact):
+        with MemoryClient() as client:
+            client._driver = MagicMock()  # prevent real Neo4j driver creation
+            client.write("Test Fact", summary="s", provenance=prov)
+
+    assert len(captured_topics) == 1
+    assert captured_topics[0]['provenance'] is prov
+    assert captured_topics[0]['name'] == "Test Fact"
+    assert captured_topics[0]['source_file'] == 'api'
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — Trust-filtered search
+# ---------------------------------------------------------------------------
+
+def test_search_vector_accepts_trust_filter():
+    """search_vector signature must include trust_filter parameter."""
+    import inspect
+    from ai_memory.search import search_vector
+    sig = inspect.signature(search_vector)
+    assert 'trust_filter' in sig.parameters
+
+
+def test_search_graph_accepts_trust_filter():
+    """search_graph signature must include trust_filter parameter."""
+    import inspect
+    from ai_memory.search import search_graph
+    sig = inspect.signature(search_graph)
+    assert 'trust_filter' in sig.parameters
+
+
+def test_memory_client_search_accepts_trust_filter():
+    """MemoryClient.search signature must include trust_filter parameter."""
+    import inspect
+    from ai_memory import MemoryClient
+    sig = inspect.signature(MemoryClient.search)
+    assert 'trust_filter' in sig.parameters
+
+
+def test_search_vector_empty_query_with_trust_filter_returns_empty():
+    """Empty query short-circuits before Ollama/Neo4j regardless of trust_filter."""
+    from ai_memory.search import search_vector
+    assert search_vector("", trust_filter="trusted") == []
+    assert search_vector("   ", trust_filter="suspicious") == []
+
+
+def test_search_graph_empty_query_with_trust_filter_returns_empty():
+    """Empty query short-circuits before Lucene/Neo4j regardless of trust_filter."""
+    from ai_memory.search import search_graph
+    assert search_graph("", trust_filter="trusted") == []
+    assert search_graph("\t", trust_filter="high_risk") == []
+
+
+def test_search_vector_passes_trust_filter_to_session_run():
+    """trust_filter must reach the session.run kwargs, not be silently dropped."""
+    import sys
+    from unittest.mock import MagicMock, patch
+    from ai_memory.search import search_vector
+
+    captured_kwargs: dict = {}
+
+    # search_vector does `import ollama` inside the function; inject a fake module
+    # so the import succeeds even when ollama is not installed.
+    fake_ollama = MagicMock()
+    fake_ollama.embeddings.return_value = {"embedding": [0.0] * 768}
+
+    mock_result = MagicMock()
+    mock_result.__iter__ = MagicMock(return_value=iter([]))
+
+    def capturing_run(cypher, **kwargs):
+        captured_kwargs.update(kwargs)
+        return mock_result
+
+    mock_session = MagicMock()
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+    mock_session.run.side_effect = capturing_run
+
+    mock_driver = MagicMock()
+    mock_driver.session.return_value = mock_session
+
+    with patch.dict(sys.modules, {"ollama": fake_ollama}), \
+         patch("ai_memory.search.get_driver", return_value=mock_driver):
+        search_vector("test query", trust_filter="trusted")
+
+    assert "trust_filter" in captured_kwargs
+    assert captured_kwargs["trust_filter"] == "trusted"
+
+
+def test_memory_client_search_trust_filter_empty_string_raises():
+    """trust_filter='' must raise ValueError — empty string silently returns no results."""
+    import pytest
+    from unittest.mock import MagicMock
+    from ai_memory import MemoryClient
+    with MemoryClient() as client:
+        client._driver = MagicMock()
+        with pytest.raises(ValueError, match="empty"):
+            client.search("query", trust_filter="")
+
+
+def test_memory_client_write_filters_empty_key_points():
+    """key_points with empty strings must be filtered before writing to Neo4j."""
+    from unittest.mock import MagicMock, patch
+    from ai_memory import MemoryClient
+
+    captured_topics = []
+
+    def fake_write_fact(topic, **kwargs):
+        captured_topics.append(topic)
+        return True
+
+    with patch('ai_memory._write_fact', side_effect=fake_write_fact):
+        with MemoryClient() as client:
+            client._driver = MagicMock()
+            client.write("Test", key_points=["valid point", "", "another valid"])
+
+    assert captured_topics[0]['key_points'] == ["valid point", "another valid"]
+
+
+def test_parse_provenance_frontmatter_empty_trust_skipped():
+    """Empty string trust value in frontmatter must not reach the Provenance object."""
+    from ai_memory.learn import _parse_provenance_frontmatter
+    content = """\
+---
+name: Test
+provenance:
+  source: web_fetch
+  trust:
+---
+Body.
+"""
+    prov = _parse_provenance_frontmatter(content)
+    assert prov is not None
+    assert prov.trust == "unknown"
+
+
+def test_memory_client_search_trust_filter_with_faiss_raises():
+    """Combining use_embeddings=True with trust_filter must raise ValueError."""
+    import pytest
+    from unittest.mock import MagicMock
+    from ai_memory import MemoryClient
+    with MemoryClient() as client:
+        client._driver = MagicMock()
+        with pytest.raises(ValueError, match="trust_filter"):
+            client.search("query", use_embeddings=True, trust_filter="trusted")

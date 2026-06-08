@@ -44,6 +44,8 @@ def create_schema(driver):
             "CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
             # Phase 2 multi-tenancy: Assistant nodes must have unique stable IDs
             "CREATE CONSTRAINT assistant_id_unique IF NOT EXISTS FOR (a:Assistant) REQUIRE a.id IS UNIQUE",
+            # Source nodes are created by ai_memory/learn._sync_fact_tx for provenance tracking
+            "CREATE CONSTRAINT source_name_unique IF NOT EXISTS FOR (s:Source) REQUIRE s.name IS UNIQUE",
         ]
 
         for constraint in constraints:
@@ -62,6 +64,9 @@ def create_schema(driver):
             # Phase 2 multi-tenancy: efficient filtering by assistant/mind
             "CREATE INDEX fact_assistant_idx IF NOT EXISTS FOR (f:Fact) ON (f.assistant)",
             "CREATE INDEX session_assistant_idx IF NOT EXISTS FOR (s:Session) ON (s.assistant)",
+            # Temporal and source-file lookups (written by ai_memory/learn.py)
+            "CREATE INDEX fact_created_at_idx IF NOT EXISTS FOR (f:Fact) ON (f.created_at)",
+            "CREATE INDEX fact_source_file_idx IF NOT EXISTS FOR (f:Fact) ON (f.source_file)",
         ]
 
         for index in indexes:
@@ -101,14 +106,36 @@ def create_schema(driver):
                 print("  (Vector search requires Neo4j 5.x+)")
 
         # 4. Full-text index for keyword search
-        # Covers Fact.name and Fact.content — the properties actually written by neo4j_sync.py
+        # Covers name + content (neo4j_sync.py) + summary (ai_memory/learn.py)
+        # MIGRATION: if fact_content already exists with [name, content] only,
+        # run `DROP INDEX fact_content` in Neo4j Browser, then re-run this script.
         print("Creating full-text index...")
 
         try:
             session.run("""
                 CREATE FULLTEXT INDEX fact_content IF NOT EXISTS
-                FOR (n:Fact) ON EACH [n.name, n.content]
+                FOR (n:Fact) ON EACH [n.name, n.content, n.summary]
             """)
+            # Detect existing index with wrong property list (IF NOT EXISTS skips recreation)
+            result = session.run(
+                "SHOW INDEXES YIELD name, type, properties "
+                "WHERE name = 'fact_content' AND type = 'FULLTEXT' RETURN properties"
+            )
+            rec = result.single()
+            if rec is None:
+                # IF NOT EXISTS skipped — something named 'fact_content' exists but
+                # is not a FULLTEXT index (e.g. a stale RANGE index with the same name).
+                print(
+                    "  Warning: 'fact_content' exists but is NOT a FULLTEXT index.\n"
+                    "  Run: DROP INDEX fact_content; then re-run neo4j_seed.py."
+                )
+            elif "summary" not in (rec["properties"] or []):
+                print(
+                    "  Warning: fact_content index exists but does NOT cover n.summary.\n"
+                    "  Run: DROP INDEX fact_content; then re-run neo4j_seed.py to upgrade."
+                )
+            else:
+                print("  Full-text index fact_content ready ([name, content, summary])")
         except Exception as e:
             if "already exists" not in str(e).lower():
                 print(f"  Warning: {e}")
@@ -117,7 +144,12 @@ def create_schema(driver):
 
 
 def verify_schema(driver):
-    """Verify schema was created."""
+    """Quick count-only sanity check after create_schema().
+
+    Prints total constraint and index counts — does NOT validate that the
+    correct named items exist. For rigorous validation run:
+        python3 scripts/verify_schema.py
+    """
 
     with driver.session() as session:
         result = session.run("SHOW CONSTRAINTS")
@@ -140,6 +172,7 @@ def verify_schema(driver):
                 print("  Note: no vector index found (requires Neo4j 5.x+)")
         except Exception as e:
             print(f"  Warning: could not verify vector index: {e}")
+    print("  Run `python3 scripts/verify_schema.py` for full schema validation.")
 
 
 def main():
