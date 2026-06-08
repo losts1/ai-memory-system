@@ -1,0 +1,234 @@
+================================================================================
+UPSTREAM BUG REPORT - ai-memory-system v1.3.2
+================================================================================
+
+REPOSITORY: https://github.com/losts1/ai-memory-system
+REPORT DATE: 2026-06-04
+REPORTED BY: Lee Veal (lee-a-veal)
+VERSION: v1.3.2 (commit c9f9545)
+
+================================================================================
+TITLE
+================================================================================
+
+BUG: MemoryStateManager constructor expects session_id, not agent_id
+API: Multi-agent parameter naming inconsistency
+
+================================================================================
+SEVERITY
+================================================================================
+
+HIGH - Breaking API change affecting multi-agent implementations
+
+================================================================================
+ISSUE DESCRIPTION
+================================================================================
+
+The MemoryStateManager class has a parameter naming mismatch that breaks code
+expecting agent_id= parameter. The class uses session_id= instead, while other
+multi-agent APIs in the same library use assistant= parameter.
+
+================================================================================
+CURRENT BEHAVIOR
+================================================================================
+
+from ai_memory import state
+
+# Expected usage (based on multi-agent patterns elsewhere):
+manager = state.MemoryStateManager(agent_id="test-agent")
+
+# Actual error:
+# TypeError: __init__() got an unexpected keyword argument 'agent_id'
+
+# Current correct usage:
+manager = state.MemoryStateManager(session_id="session-1")
+
+================================================================================
+EXPECTED BEHAVIOR
+================================================================================
+
+The API should either:
+1. Accept agent_id= parameter (for clarity in multi-agent contexts)
+2. Or use consistent parameter naming across all multi-agent APIs
+
+================================================================================
+CURRENT SIGNATURE
+================================================================================
+
+Location: ai_memory/state.py
+
+class MemoryStateManager:
+    def __init__(self, workspace=None, session_id: Optional[str] = None):
+        ...
+
+================================================================================
+API INCONSISTENCY EVIDENCE
+================================================================================
+
+Other modules use assistant= for agent scoping:
+
+  graph.traverse(..., assistant="Claude")
+  search.search_files(..., assistant="Claude")
+  learn.sync_facts(..., assistant="Claude")
+
+But MemoryStateManager uses:
+
+  state.MemoryStateManager(session_id="session-1")
+
+This creates naming inconsistency for developers building multi-agent systems.
+
+================================================================================
+ENVIRONMENT
+================================================================================
+
+- Python: 3.9.25
+- ai-memory-system: v1.3.2 (commit c9f9545)
+- neo4j: 5.28.4
+- python-dotenv: 1.2.1
+- pytz: 2026.2
+- OS: Oracle Linux 8.x
+
+================================================================================
+TEST CASE
+================================================================================
+
+from ai_memory import state
+import inspect
+
+# Check the actual signature
+sig = inspect.signature(state.MemoryStateManager)
+print(f"Signature: {sig}")
+# Output: (workspace=None, session_id: Optional[str] = None)
+
+# Try expected API (breaks)
+try:
+    manager = state.MemoryStateManager(agent_id="test")
+    print("✓ Works with agent_id=")
+except TypeError as e:
+    print(f"✗ Error: {e}")
+    # Output: ✗ Error: __init__() got an unexpected keyword argument 'agent_id'
+
+# Current API (works)
+try:
+    manager = state.MemoryStateManager(session_id="test")
+    print("✓ Works with session_id=")
+except TypeError as e:
+    print(f"✗ Error: {e}")
+
+================================================================================
+ROOT CAUSE ANALYSIS
+================================================================================
+
+This appears to be a Phase 2/Phase 3 refactoring artifact where:
+
+1. Multi-agent support was added with assistant= parameter (Phase 2)
+2. MemoryStateManager was extracted to library (Phase 3)
+3. Parameter naming was not standardized across new modules
+4. session_id= was used instead of agent_id= or assistant=
+
+The parameter name session_id suggests single-session context, but the class
+is intended for multi-agent scenarios (based on usage in graph/search/learn APIs).
+
+================================================================================
+PROPOSED SOLUTIONS
+================================================================================
+
+SOLUTION 1: Add agent_id= Parameter (RECOMMENDED - Backwards Compatible)
+----------------------------------------------------------------------
+
+def __init__(self, workspace=None, session_id: Optional[str] = None,
+             agent_id: Optional[str] = None):
+    # Accept both, prefer agent_id if provided
+    final_id = agent_id or session_id
+    self.session_id = final_id
+
+Pros:
+  - Backwards compatible
+  - Clear intent (agent_id is clearer than session_id for multi-agent)
+  - Allows future migration to assistant= if desired
+
+Cons:
+  - Two parameter names for same concept (temporary)
+
+
+SOLUTION 2: Rename to agent_id= (BREAKING CHANGE)
+--------------------------------------------------
+
+def __init__(self, workspace=None, agent_id: Optional[str] = None):
+    self.agent_id = agent_id
+    self.session_id = agent_id  # Alias for compatibility
+
+Pros:
+  - Consistent with multi-agent patterns
+  - Clearer naming
+
+Cons:
+  - Breaking change
+  - Requires migration guide
+  - Version bump needed
+
+
+SOLUTION 3: Standardize on assistant= (DESIGN ALIGNMENT)
+-------------------------------------------------------
+
+Rename across all modules:
+  - state.MemoryStateManager(assistant=...)
+  - (already using in graph/search/learn)
+
+Pros:
+  - Single consistent parameter name across library
+
+Cons:
+  - Breaking change to all modules
+  - Requires major version bump
+  - Largest migration effort
+
+================================================================================
+RECOMMENDATION
+================================================================================
+
+SOLUTION 1 (Add agent_id= parameter)
+
+Timeline:
+  - v1.3.3: Add agent_id= parameter, deprecate session_id=
+  - v1.4.0: Decide on final parameter name
+  - Update CHANGELOG and migration docs
+  - Update all examples and tests
+
+This maintains backwards compatibility while fixing the API inconsistency.
+
+================================================================================
+RELATED FILES TO UPDATE
+================================================================================
+
+If accepted:
+  - ai_memory/state.py (MemoryStateManager class)
+  - tests/test_library.py (test cases)
+  - docs/MIGRATION.md (version-specific guide)
+  - CHANGELOG.md (version notes)
+  - examples/ (update usage patterns)
+  - README.md (if API examples are included)
+
+================================================================================
+ADDITIONAL CONTEXT
+================================================================================
+
+See attached documentation in:
+  - Branch: bug/api-mismatch-memorystatemanager
+  - File: docs/BUG_REPORT_v1_3_2_API_ISSUES.md
+
+The branch has been pushed to:
+  https://github.com/lee-a-veal/ai-memory-system
+
+Pull request can be created at:
+  https://github.com/losts1/ai-memory-system/pull/new/lee-a-veal:bug/api-mismatch-memorystatemanager
+
+================================================================================
+CONTACT
+================================================================================
+
+Reported by: Lee Veal (lee-a-veal)
+Date: 2026-06-04
+GitHub: https://github.com/lee-a-veal
+
+================================================================================

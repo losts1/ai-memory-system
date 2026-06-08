@@ -332,8 +332,8 @@ class MemoryClient:
         name: str,
         *,
         summary: str = "",
-        key_points: list[str] | None = None,
-        provenance: "Provenance | None" = None,
+        key_points: Optional[List[str]] = None,
+        provenance: Optional["Provenance"] = None,
     ) -> bool:
         """Write a single Fact node directly to Neo4j with optional provenance.
 

@@ -404,7 +404,7 @@ def _post_sync_tx(tx, max_df_ratio: float = 0.1, min_shared: int = 2) -> None:
 def write_fact(
     topic: dict,
     *,
-    assistant: str | None = None,
+    assistant: Optional[str] = None,
     driver=None,
     workspace=None,
 ) -> bool:

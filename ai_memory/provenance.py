@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 TrustLevel = Literal["trusted", "untrusted", "suspicious", "high_risk", "unknown"]
 SourceType = Literal[
@@ -24,17 +24,17 @@ class Provenance:
 
     source: SourceType
     trust: TrustLevel = "unknown"
-    risk_score: int | None = None
-    risk_band: Literal["none", "low", "medium", "high"] | None = None
+    risk_score: Optional[int] = None
+    risk_band: Optional[Literal["none", "low", "medium", "high"]] = None
     signals: list[str] = field(default_factory=list)
-    original_source: str | None = None
+    original_source: Optional[str] = None
     written_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
-    session_id: str | None = None
-    assistant: str | None = None
-    scan_version: str | None = None
-    notes: str | None = None
+    session_id: Optional[str] = None
+    assistant: Optional[str] = None
+    scan_version: Optional[str] = None
+    notes: Optional[str] = None
 
     def __post_init__(self) -> None:
         if isinstance(self.signals, str):
