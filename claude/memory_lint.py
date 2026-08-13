@@ -71,6 +71,32 @@ STAMP_FULL = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d)?(Z|[+-]\d\d:?\d\d)")
 STAMP_DATE = re.compile(r"\d{4}-\d\d-\d\d")
 
 
+# Pointer rot: a memory naming a path that no longer exists. This is its OWN
+# class, deliberately checked even for `reference` memories — pointers are
+# exactly what reference memories carry, and paths move. Found 2026-08-13:
+# reference_ai_memory_repo named /home/lost/.openclaw/workspace as the clone of
+# ai-memory-system (it is Nova2.0), and feedback_dashboard_path asserts a git
+# repo at /home/lost/.git which does not exist.
+PATHISH = re.compile(r"(?<![\w-])(/home/[a-z]+/[A-Za-z0-9_./-]{3,}|~/[A-Za-z0-9_./-]{3,})")
+# Skip anything templated or globbed — those are patterns, not paths.
+PLACEHOLDER = re.compile(r"[*?<>{}]|\b(PAIR|BASE|NAME|slug)\b")
+
+
+def dead_paths(text):
+    """Absolute paths named in a memory that do not exist on disk."""
+    import os as _os
+    out = set()
+    for raw in set(PATHISH.findall(text)):
+        cand = raw.rstrip(".,;:)`'\"")
+        # A trailing separator means the regex clipped a glob or placeholder —
+        # e.g. ".../logs/maker_" from "maker_*.jsonl". Those are patterns, not paths.
+        if PLACEHOLDER.search(cand) or cand.endswith(("-", "_")):
+            continue
+        if not _os.path.exists(_os.path.expanduser(cand)):
+            out.add(cand)              # set: the same path may appear twice in one memory
+    return sorted(out)
+
+
 def body_of(text):
     """Strip YAML frontmatter; return (frontmatter, body)."""
     m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
@@ -94,15 +120,19 @@ INVARIANT_WORDS = re.compile(
 def inspect(text):
     """Return the list of findings for one memory's raw text."""
     fm, body = body_of(text)
+    # Pointer rot is checked for EVERY type, before the invariant exclusions:
+    # a reference memory cannot assert an invariant about a path that is gone.
+    found = [("dead-path", f"names a path that does not exist: {p}")
+             for p in dead_paths(text)]
+
     mtype = re.search(r"^\s*type:\s*(\w+)", fm, re.M)
     if mtype and mtype.group(1).lower() in INVARIANT_TYPES:
-        return []                      # rules and reference facts do not rot
+        return found                   # rules and reference facts do not rot — but paths do
     if INVARIANT_WORDS.search(body):
-        return []                      # self-declared invariant
+        return found                   # self-declared invariant
     # `description:` matters most: it is the line MEMORY.md loads into context.
     desc = re.search(r"^description:\s*(.+)$", fm, re.M)
     desc = desc.group(1) if desc else ""
-    found = []
     if CLAIM.search(body) and not RECHECK.search(body):
         found.append(("no-recheck", "live-state claim with no way to re-derive it"))
     if CLAIM.search(desc):
@@ -188,14 +218,21 @@ def main():
         for kind, msg in found:
             by_kind.setdefault(kind, []).append((fn, msg))
 
-    for kind in ("claim-in-description", "no-recheck", "undated-claim"):
+    for kind in ("dead-path", "claim-in-description", "no-recheck", "undated-claim"):
         hits = by_kind.get(kind, [])
         if not hits:
             continue
         print(f"## {kind} ({len(hits)})\n")
-        print(f"_{hits[0][1]}_\n")
-        for fn, _ in hits:
-            print(f"- {fn}")
+        if kind == "dead-path":
+            # Each finding names a different path, so show it per line.
+            print("_Path named in the memory no longer exists. Either the thing moved "
+                  "(update the pointer) or it was removed (archive the memory)._\n")
+            for fn, msg in hits:
+                print(f"- `{fn}` — {msg.split(': ', 1)[-1]}")
+        else:
+            print(f"_{hits[0][1]}_\n")
+            for fn, _ in hits:
+                print(f"- {fn}")
         print()
     return 0
 
