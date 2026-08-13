@@ -82,9 +82,37 @@ PATHISH = re.compile(r"(?<![\w-])(/home/[a-z]+/[A-Za-z0-9_./-]{3,}|~/[A-Za-z0-9_
 PLACEHOLDER = re.compile(r"[*?<>{}]|\b(PAIR|BASE|NAME|slug)\b")
 
 
+# A memory about another machine legitimately names paths that do not exist
+# HERE. Verified 2026-08-13: every such memory in the corpus names its host —
+# project_ai_server_qwen36 and qwen_backend_idle_spin_latch say "ai-server",
+# project_pi_bitchat_peer says "Raspberry Pi", reference_aws_proxy says
+# "us-east-1". Without this, ~15 of 27 dead-path findings were remote paths
+# being checked against the wrong filesystem.
+REMOTE_HOST = re.compile(
+    r"ai-server|raspberry ?pi|raspberrypi|\bpi\b|ec2|aws|us-east-1|us-west-2|"
+    r"192\.168\.99\.\d+|/home/ubuntu|remote host|on the server",
+    re.I,
+)
+
+
+# Words that mark a path as one that SHOULD be absent — a decoy, a stale copy,
+# a superseded location. Their absence confirms the memory rather than breaking it.
+NEGATED = re.compile(
+    r"\bNOT\b|used to|no longer|stale|orphan|decoy|deleted|removed|superseded|"
+    r"instead of|rather than|don'?t (?:use|edit)|avoid|wrong copy|previously",
+    re.I,
+)
+
+
 def dead_paths(text):
-    """Absolute paths named in a memory that do not exist on disk."""
+    """Absolute paths named in a memory that do not exist on disk.
+
+    Skipped entirely when the memory is about another machine — the paths are
+    real, just not here.
+    """
     import os as _os
+    if REMOTE_HOST.search(text):
+        return []
     out = set()
     for raw in set(PATHISH.findall(text)):
         cand = raw.rstrip(".,;:)`'\"")
@@ -92,8 +120,17 @@ def dead_paths(text):
         # e.g. ".../logs/maker_" from "maker_*.jsonl". Those are patterns, not paths.
         if PLACEHOLDER.search(cand) or cand.endswith(("-", "_")):
             continue
-        if not _os.path.exists(_os.path.expanduser(cand)):
-            out.add(cand)              # set: the same path may appear twice in one memory
+        if _os.path.exists(_os.path.expanduser(cand)):
+            continue
+        # A path can be named precisely BECAUSE it should not exist: "NOT the
+        # /home/lost/... copy", "there used to be a decoy at ...", "likely stale
+        # or orphaned". Those memories are correct and its absence confirms them.
+        # Verified 2026-08-13: 5 of 9 remaining findings were this shape.
+        for m in re.finditer(re.escape(cand), text):
+            window = text[max(0, m.start() - 120):m.start()]
+            if not NEGATED.search(window):
+                out.add(cand)
+                break
     return sorted(out)
 
 
