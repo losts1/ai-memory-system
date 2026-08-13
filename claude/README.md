@@ -1,8 +1,17 @@
-# Memory freshness tooling
+# Claude Code integration
 
-A snapshot of the freshness pipeline running against a live Claude Code memory
-store (`~/.claude/projects/<slug>/memory/`). Committed here so it is versioned —
-the deployment directory is not under version control.
+The rest of this repository is the redistribution package, derived from the
+OpenClaw memory system. This directory is the **Claude Code implementation** —
+the pieces that hook a memory store into Claude Code specifically:
+`~/.claude/projects/<slug>/memory/`, driven by Claude Code's `Stop` hook and OS
+cron rather than an agent heartbeat.
+
+It is a snapshot of a live deployment, committed here so it is versioned; the
+deployment directory itself is not under version control.
+
+Keep it separate from the core: the concepts (decay classes, archive-not-delete,
+report-only tooling) are portable, but the wiring — hook names, stdin JSON
+shape, `MEMORY.md` auto-load cap — is Claude Code's.
 
 ## Why this exists
 
@@ -88,7 +97,7 @@ worked examples of *what* to fingerprint, not as reusable code.
 
 ## Verification
 
-`memory_lint.py --selftest` is the one to run after any change. Its fixtures are
+`python3 claude/memory_lint.py --selftest` is the one to run after any change. Its fixtures are
 the real pre-rewrite memory that caused the original failure, recovered from
 backup, and its corrected form. If the detector stops catching the first or
 starts flagging the second, it has regressed.
