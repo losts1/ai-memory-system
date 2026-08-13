@@ -41,6 +41,7 @@ Usage:
     python3 archive_memory.py --restore <file.md>
 """
 import datetime
+import glob
 import os
 import re
 import shutil
@@ -75,6 +76,27 @@ def archive(filename, reason):
     else:                                    # no metadata block — create one
         fm_end = text.index("---", text.index("---") + 3)
         text = text[:fm_end] + "metadata:\n" + stamp + text[fm_end:]
+
+    # Archiving breaks inbound [[links]] — they resolve against the top-level
+    # directory only. Observed 2026-08-13: archiving project_aws_ssh_security
+    # left two dangling links in reference_aws_proxy that went unnoticed until a
+    # separate link check ran. Warn so the caller can repoint them.
+    stem = filename[:-3]
+    inbound = []
+    for other in sorted(glob.glob(os.path.join(MEMORY_DIR, "*.md"))):
+        if os.path.basename(other) == filename:
+            continue
+        try:
+            if f"[[{stem}]]" in open(other, encoding="utf-8").read():
+                inbound.append(os.path.basename(other))
+        except OSError:
+            pass
+    if inbound:
+        print(f"warning: {len(inbound)} memor{'y' if len(inbound)==1 else 'ies'} link to [[{stem}]] "
+              f"and will dangle after this move:")
+        for f in inbound:
+            print(f"    {f}")
+        print("  repoint them to archive/%s before or after archiving." % filename)
 
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
     dst = os.path.join(ARCHIVE_DIR, filename)
