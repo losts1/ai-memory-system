@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${HOME}/.grok/skills/neo4j-memory/scripts/neo4j_memory.py hook-session",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${HOME}/.grok/skills/neo4j-memory/scripts/neo4j_memory.py hook-prompt",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${HOME}/.grok/skills/neo4j-memory/scripts/neo4j_memory.py hook-stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

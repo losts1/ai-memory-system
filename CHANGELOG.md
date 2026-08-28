@@ -7,6 +7,14 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`grok/`** — Grok Build TUI integration: copy-in skill, SessionStart /
+  UserPromptSubmit / Stop hooks, home rule, and an LLM runbook
+  (`grok/README.md`) to repeat the Neo4j wiring. Thin Bolt CLI (fulltext
+  search, tagged write, per-mind organize). Does not require `pip install -e .`.
+
 ## [1.3.3] - 2026-06-05
 
 QA audit round 8 — broad inconsistency sweep across all library and script

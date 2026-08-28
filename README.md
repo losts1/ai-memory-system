@@ -12,6 +12,11 @@ This repository contains the **public redistribution package** — the clean boo
 
 **Important:** This is the public starter kit. The full production system (deeper RLM features, advanced tooling, heavy domain-specific work) lives in a private environment. See [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) for the full picture.
 
+Agent-harness wiring (not the core library):
+
+- **[grok/](./grok/)** — Grok Build TUI ↔ Neo4j (skill + hooks + home rule). LLM runbook: [grok/README.md](./grok/README.md)
+- **[claude/](./claude/)** — Claude Code memory-freshness pipeline (Stop hook, distill, lint). Separate from Grok.
+
 ### Phase Progress
 
 - **Phase 0** (Foundations & Decisions): Complete
@@ -229,6 +234,13 @@ ai-memory-system/
 │       ├── memory_state.py   # Per-session lazy loading state
 │       ├── neo4j_learn_sync.py  # Ingest learner notes → Facts + Word index
 │       └── metadata.py       # Metadata helpers
+├── grok/                     # Grok Build TUI ↔ Neo4j wiring (LLM runbook in grok/README.md)
+│   ├── README.md
+│   ├── env.neo4j.example
+│   ├── hooks/neo4j-memory.json
+│   ├── rules/neo4j-memory.md
+│   └── skills/neo4j-memory/
+├── claude/                   # Claude Code freshness pipeline (not Grok)
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── CRON_JOBS.md
