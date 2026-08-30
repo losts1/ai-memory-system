@@ -18,7 +18,7 @@ The AI Memory System is a **hybrid memory architecture** combining markdown file
 
 This documentation describes the public redistribution package. The actual system used in production contains significant additional RLM enhancements (lazy metadata-only loading, graph-based parameter tracing, per-session memory state tracking, advanced learn sync, etc.). These are documented in the private environment and are being gradually upstreamed as part of the upgrade plan.
 
-See [docs/SUBMINDS.md](./SUBMINDS.md) for guidance on attaching new minds to an existing graph.
+See [docs/SUBMINDS.md](./SUBMINDS.md) for guidance on attaching new minds to an existing graph, and [docs/PROVENANCE.md](./PROVENANCE.md) for origin/trust metadata on Facts.
 
 **Domain neutrality note (Phase 5):** The architecture and tools are domain-agnostic. Concrete examples for research, software engineering, personal knowledge, and trading (explicitly labeled) live in the `examples/` directory at the repository root.
 
@@ -74,7 +74,7 @@ summary: "Max 200 chars"
 ---
 ```
 
-**Cron job:** Daily at 4am EST, converts raw logs → QMD summaries.
+**Cron job:** Daily at 4am (adjust timezone as needed), converts raw logs → QMD summaries.
 
 **Subdirectories:**
 | Dir | Purpose |
@@ -90,13 +90,20 @@ summary: "Max 200 chars"
 **What it is:** Persistent relational memory with vector search.
 
 **Schema:**
-- `Fact` nodes — Learned topics with 768-dim embeddings (`nomic-embed-text`)
+- `Fact` nodes — Learned topics with 768-dim embeddings (`nomic-embed-text`);
+  optionally carry flat `provenance_*` properties (origin, trust, scan result — see
+  [PROVENANCE.md](./PROVENANCE.md))
 - `Session` nodes — Source file pointers (no raw content stored)
-- Relationships — `LEARNED_IN` (Fact → Session)
+- `Word` nodes — Tokenized fact names for keyword bridging
+- `Source` nodes — Source files facts were synced from
+- `Assistant` nodes — Multi-mind attribution (Phase 2)
+- Relationships — `LEARNED_IN` (Fact → Session), `HAS_WORD` (Fact → Word),
+  `FROM_SOURCE` (Fact → Source), plus `RELATED_TO` / `SHARES_PARAMETER`
+  used by graph traversal
 
 **Indexes:**
 - Vector index `fact_embeddings` — semantic similarity on `Fact.embedding`
-- Fulltext index `fact_content` — keyword search on `Fact.name` + `Fact.content`
+- Fulltext index `fact_content` — keyword search on `Fact.name` + `Fact.content` + `Fact.summary`
 
 **Sync jobs:**
 - Every 30 min: Sessions → Graph
@@ -123,7 +130,7 @@ python3 ~/.ai-memory/scripts/hybrid_memory_search.py "your topic" --files-only
 
 **Model:** `nomic-embed-text` (768-dim, local Ollama)
 
-**Usage:** Pass `--use-embeddings` to `hybrid_memory_search.py` to use FAISS instead of Neo4j for the semantic layer. Requires `faiss-cpu` (included in `requirements.txt`).
+**Usage:** Pass `--use-embeddings` to `hybrid_memory_search.py` to use FAISS instead of Neo4j for the semantic layer. Requires `faiss-cpu` (optional — commented out in `requirements.txt`; install it directly or via the `vector` extra in `pyproject.toml`).
 
 **Caveats:**
 - **Score direction is inverted vs Neo4j**: FAISS returns L2 distance (lower = more similar); Neo4j vector returns cosine similarity (higher = more similar). Do not merge or rank results from both sources together without normalizing.

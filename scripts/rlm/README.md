@@ -26,7 +26,7 @@ These are some of the most powerful and distinctive parts of the original privat
 
 ## Recommended Reading
 
-- `docs/RLM.md` (in the repo root) — High-level explanation and usage examples
+- `docs/RLM.md` — High-level explanation and usage examples
 - `UPGRADE_PLAN.md` — Full Phase 3/4 roadmap and philosophy
 
 ## Feedback

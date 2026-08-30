@@ -47,8 +47,13 @@ Every learner session must pass:
 
 ## Session Format
 
+> **Graph ingestion requires the header form below.** The sync parsers only
+> create Fact nodes from `# Learner Session: <topic>` / `## Learned: <topic>`
+> headers (`ai_memory/learn.py` `parse_learned_topics`); a file titled with a
+> bare `# Topic Name` is readable by humans and file search but yields no Facts.
+
 ```markdown
-# Topic Name
+# Learner Session: Topic Name
 
 ## Summary
 [1-2 sentence overview]
@@ -110,14 +115,16 @@ Example MEMORY.md entry:
 
 ## Integration with Neo4j
 
-Learner sessions sync to the knowledge graph via the standard sync script.
-Learner session files follow the same `## Learned:` header format as daily logs,
-so `neo4j_sync.py` picks them up automatically:
+Learner sessions sync to the knowledge graph via the learn-sync pipeline
+(`neo4j_sync.py` scans only top-level `memory/*.md`; it does **not** descend
+into `memory/learner-sessions/`):
 
 ```bash
-# Run manually or via the Neo4j Session Sync cron job
+# Run manually or via the Learner Sync cron job
 source ~/.ai-memory/neo4j-venv/bin/activate
-python3 ~/.ai-memory/scripts/neo4j_sync.py
+python3 ~/.ai-memory/scripts/rlm/neo4j_learn_sync.py --days 7
+# or, with the package installed:
+ai-memory learn-sync --days 7
 ```
 
 Creates:
@@ -188,9 +195,8 @@ Change cron expression:
 ## Troubleshooting
 
 ### Learner not running
-- Check cron job status: `cron list`
-- Verify job is `enabled: true`
-- Check `consecutiveErrors` count
+- Check job status under whatever scheduler runs it (crontab, systemd timer, agent platform)
+- Verify the job is enabled and look at its recent error/exit history
 
 ### Duplicate topics
 - Topic registry (`memory/learner-topics.json`) tracks completed topics
@@ -210,4 +216,5 @@ Change cron expression:
 | `memory/curiosity-queue.md` | Topic priorities |
 | `memory/learner-topics.json` | Topic registry |
 | `memory/learner-sessions/*.md` | Session outputs |
-| `scripts/neo4j_sync.py` | Sync all session files to knowledge graph |
+| `scripts/rlm/neo4j_learn_sync.py` | Sync learner sessions + daily notes to knowledge graph |
+| `scripts/neo4j_sync.py` | Sync top-level `memory/*.md` daily logs to knowledge graph |

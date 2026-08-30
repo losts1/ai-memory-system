@@ -187,7 +187,7 @@ High-value pieces to consider upstreaming (in rough priority):
 
 ---
 
-### Phase 6: Tooling, Packaging & Developer Experience (In Progress)
+### Phase 6: Tooling, Packaging & Developer Experience (Complete)
 
 **Delivered in initial pass:**
 - New unified `ai-memory` CLI (`scripts/cli.py`) with subcommands:
@@ -247,7 +247,7 @@ Remaining nice-to-haves tracked in Phase 7 (release).
 
 ## Appendix: Key Files & Concepts Referenced
 
-**From production system (not yet in public repo):**
+**From production system (not yet public when this was written — since upstreamed to `scripts/rlm/` and `ai_memory/`):**
 - `neo4j_traverse.py` (especially parameter tracing)
 - `memory_state.py`
 - `neo4j_learn_sync.py` + `neo4j_auto_sync.py`
@@ -262,6 +262,6 @@ Remaining nice-to-haves tracked in Phase 7 (release).
 
 ---
 
-**Status:** Draft plan for discussion. Ready to be turned into GitHub issues and a phased implementation once decisions in Phase 0 are made.
+**Status:** Executed. All phases (0–7) are complete — see the per-phase Status markers above and the Phase Progress list in `README.md`. Kept as the record of the plan and its rationale.
 
 — Weft 🧵 (with heavy reference to direct usage experience attaching to the live graph)

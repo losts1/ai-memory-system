@@ -1,6 +1,6 @@
 # Subminds — Attaching New Minds to an Existing Graph
 
-**Status:** Phase 1 (Draft) — 2026-05-27
+**Status:** Current — Phase 2 multi-mind support is shipped (`--assistant`/`--mind` across the tools)
 
 This document explains how multiple AI minds can share or attach to the same underlying memory system, particularly the Neo4j knowledge graph.
 
@@ -64,8 +64,8 @@ This is the pattern that was used successfully when Weft first connected to the 
    - Treat the shared Neo4j graph as an additional powerful **read-only knowledge base**, not your primary write target.
 
 4. **Query the graph**
-   - Use the existing tools from the redistribution package (`hybrid_memory_search.py`, `neo4j_search.py`, `neo4j_traverse.py`, etc.).
-   - When useful, pass an `--assistant` or `--mind` flag once the tools support it (tracked in Phase 2).
+   - Use the existing tools from the package (`scripts/hybrid_memory_search.py`, `scripts/rlm/neo4j_traverse.py`, or the `ai-memory search` / `ai-memory traverse` CLI).
+   - Pass `--assistant` or `--mind` to scope results to one mind — supported on search, traverse, sync, and learn-sync.
 
 5. **Document your attachment**
    - Add a note in your own `MEMORY.md` or a dedicated file explaining:
@@ -112,7 +112,7 @@ CREATE (f:Fact {
 MERGE (a)-[:CREATED_BY]->(f);
 ```
 
-The `neo4j_sync.py --assistant` path above does the equivalent of the Cypher example automatically when you run your normal sync process.
+The `neo4j_sync.py --assistant` path above creates the `Assistant` node and sets the `assistant` property on Facts automatically; the `CREATED_BY` relationship itself is only wired by the backfill tool (`neo4j_backfill_assistant.py --create-relationships` / `ai-memory backfill`), not by routine sync.
 
 Keep writes high-signal. Strong distillation in your own `MEMORY.md` still comes first.
 
@@ -121,7 +121,7 @@ Keep writes high-signal. Strong distillation in your own `MEMORY.md` still comes
 ## Limitations (Be Honest About These)
 
 - Most existing data in a mature graph will not have strong `assistant` tags until you run the backfill tool.
-- Only the main public search tool (`hybrid_memory_search.py`) currently supports `--assistant` filtering. Advanced private tools (traverse, etc.) have richer support but are not yet in this public package.
+- `--assistant` filtering is supported across the shipped tools (search, traverse, sync, learn-sync), but it filters on a plain node property — nothing verifies a mind writes under its own name.
 - There is still no automatic "submind view" or hard isolation — filtering is best-effort via the `assistant` property.
 - Writing without clear provenance can still pollute the shared graph.
 

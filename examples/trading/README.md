@@ -21,7 +21,7 @@ The original heavy development of this memory system happened inside a sophistic
 - Cross-exchange inventory dynamics
 - Regime detection notes
 
-These become Facts. The RLM tools (`neo4j_traverse.py --parameter gamma`, `memory_state.py`, etc.) were developed specifically to navigate this kind of dense, high-stakes knowledge graph safely.
+These become Facts. The RLM tools (`scripts/rlm/neo4j_traverse.py --start "Avellaneda-Stoikov" --parameter gamma`, `scripts/rlm/memory_state.py`, etc.) were developed specifically to navigate this kind of dense, high-stakes knowledge graph safely.
 
 ## Recommendation
 

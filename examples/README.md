@@ -6,9 +6,11 @@ The goal of Phase 5 is to make the public redistribution package feel usable by 
 
 ## How to Use These
 
-1. Copy the relevant example files into your `~/.ai-memory/memory/` (or a `projects/` or `domains/` subdirectory).
+1. Read the README for the domain closest to your work (most domains ship guidance rather than files to copy; `software-engineering/` includes a sample ADR you can copy into `~/.ai-memory/memory/`).
 2. Adapt the structure and tone to your own work.
 3. Run the normal sync / learn tools — they are domain-agnostic.
+
+Two runnable end-to-end examples also live here: `01_lazy_loading_session.py` and `02_learn_and_traverse.py`.
 
 ## Domains
 

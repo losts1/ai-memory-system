@@ -32,7 +32,7 @@ Context compaction truncates session history mid-conversation. When this happens
 1. **Read today's memory file** — `memory/YYYY-MM-DD.md`. Look for in-progress tasks, recent decisions, current project state.
 2. **Search for missing context** — if you're working on a specific topic, run:
    ```bash
-   python3 ~/.ai-memory/hybrid_memory_search.py "<current topic>" --max-results 5
+   python3 ~/.ai-memory/scripts/hybrid_memory_search.py "<current topic>" --max-results 5
    ```
 3. **Validate state before acting** — don't assume you know the current state of a bot, service, or file. Re-check with `systemctl --user status <service>` or read the relevant file.
 4. **Flag uncertainty** — if you can't recover enough context to act confidently, tell the user: "Context was compacted — I've re-read memory files but may be missing [X]. Can you confirm [Y] before I proceed?"

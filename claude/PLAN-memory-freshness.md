@@ -1,7 +1,7 @@
 # Plan — memory freshness: prevention first, detection for the residue
 
 **Date:** 2026-08-13
-**Status:** plan — not implemented
+**Status:** implemented — all phases shipped in this directory (`distill.py`, `memory_watch.py`, `memory_mark.py`, `memory_lint.py`); kept as design rationale. Line-number citations below are from the pre-implementation code.
 **Scope:** `MEMORY.md` index, `distill.py`, memory frontmatter schema, one new `Stop` hook.
 
 ---

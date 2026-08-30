@@ -1,7 +1,7 @@
 # AI Memory System — Decision Log (Phase 0)
 
 **Started:** 2026-05-27  
-**Status:** In progress — decisions being made with the human.
+**Status:** Closed — the Phase 0 decisions below are made and executed (see `UPGRADE_PLAN.md`).
 
 This file tracks the key scoping and architectural decisions for the upgrade/generification effort.
 
@@ -67,13 +67,11 @@ This gives the public repo the most distinctive capabilities without exposing th
 ## D-005: UPGRADE_PLAN.md Placement & Visibility
 
 **Date:** 2026-05-27  
-**Status:** In progress
+**Status:** Done
 
 **Action taken:** Detailed plan written in AOB workspace + pointer created in the main memory system workspace.
 
-**Next:** Copy `UPGRADE_PLAN.md` into the `redistribute/` (or repo root) and link it prominently from the README.
-
-**Decision:**
+**Decision:** `UPGRADE_PLAN.md` lives at the repo root and is linked prominently from the README.
 
 ---
 

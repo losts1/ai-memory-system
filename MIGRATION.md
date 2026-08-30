@@ -2,6 +2,17 @@
 
 ---
 
+## Upgrading to v1.3.x (from v1.2.0)
+
+**No breaking changes.** Notable additions and behavior changes:
+
+- **Provenance** (v1.3.x): `Provenance` dataclass, `MemoryClient.write(name, summary=, key_points=, provenance=)`, flat `provenance_*` properties on Fact nodes, and a nested `provenance:` frontmatter block parsed by the learn pipeline. See `docs/PROVENANCE.md`.
+- **Trust filtering**: `search()` / `search_vector()` / `search_graph()` gained `trust_filter`. Note it **raises `ValueError`** when combined with `use_embeddings=True` (FAISS results carry no provenance metadata).
+- **`search_files()`**: gained a `max_files` parameter; file-scan cap and ordering changed (see CHANGELOG v1.3.1).
+- **Python 3.9 compatibility** (v1.3.3): `X | Y` union syntax reverted to `Optional[...]` — the package imports cleanly on 3.9 again.
+
+---
+
 ## Upgrading to v1.2.0 (from v1.0.x or v1.1.x)
 
 **One breaking schema change.** Existing CLIs and library imports continue to work,

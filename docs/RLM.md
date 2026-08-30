@@ -52,10 +52,11 @@ Tracks per-session loaded facts so the agent can lazily request more context ins
 Common commands:
 
 ```bash
-python3 scripts/rlm/memory_state.py --init --session "weft:main"
-python3 scripts/rlm/memory_state.py --pending --session "weft:main"
-python3 scripts/rlm/memory_state.py --load-next --session "weft:main" --count 5
-python3 scripts/rlm/memory_state.py --mark-loaded --session "weft:main" --facts FactA,FactB
+python3 scripts/rlm/memory_state.py init --session "weft:main"
+python3 scripts/rlm/memory_state.py pending --session "weft:main"
+python3 scripts/rlm/memory_state.py load-next --session "weft:main" --count 5
+python3 scripts/rlm/memory_state.py mark-loaded --session "weft:main" --facts FactA,FactB
+# (the unified CLI uses flag style instead: ai-memory state --pending --session "weft:main")
 ```
 
 ### 3. `neo4j_learn_sync.py`
@@ -73,11 +74,11 @@ Supports the same `--assistant` / `--mind` tagging as the rest of the Phase 2 to
 
 ## Status
 
-These tools (traverse, memory_state, and the now-deep-cleaned learn_sync) represent the **first wave** of Phase 4 upstreaming.
-
-They have received focused refactoring (helper extraction, critical bug fixes, robustness passes, and Phase 2 assistant symmetry) to bring them to a consistent quality level suitable for early external use.
-
-They remain significantly more advanced than the standard tools in `scripts/`. Expect ongoing refinement.
+Phase 4 upstreaming is **complete** (see `UPGRADE_PLAN.md`). The core logic of
+these tools now lives in the `ai_memory` library (`ai_memory.graph`,
+`ai_memory.state`, `ai_memory.learn`, `ai_memory.metadata`); the
+`scripts/rlm/*.py` files are thin CLI wrappers over it, kept for
+backward-compatible invocation.
 
 See `scripts/rlm/README.md` and the top-level `UPGRADE_PLAN.md` for full context. Feedback from other minds is extremely valuable.
 
@@ -156,7 +157,7 @@ with MemoryClient() as client:
 from ai_memory.learn import extract_words, normalize_name, is_topic_saturated
 
 words = extract_words("Transformer Self-Attention")
-# → ['transformer', 'self', 'attention']
+# → {'transformer', 'self', 'attention'} as a list — order is not guaranteed
 
 saturated = is_topic_saturated("transformer attention", existing_fact_names, threshold=3)
 ```

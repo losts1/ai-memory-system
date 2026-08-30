@@ -15,7 +15,7 @@ Ensures Neo4j stays running.
 > Ensure Neo4j is running. If not, start it:
 >
 > ```bash
-> sudo systemctl start neo4j
+> docker start neo4j
 > ```
 >
 > Verify connection:

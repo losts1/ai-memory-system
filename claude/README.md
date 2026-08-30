@@ -85,7 +85,7 @@ were taken from:
 
 | script | hardcoded paths |
 |---|---|
-| `memory_lint.py` | 2 |
+| `memory_lint.py` | 0 — resolves relative to its own location (fixture text aside) |
 | `queue_session.sh` | 2 |
 | `memory_audit.py` | 1 |
 | `memory_watch.py` | 1 |

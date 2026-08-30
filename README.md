@@ -64,7 +64,7 @@ See the full guides:
 - `MemoryClient` facade: `client.search()`, `client.traverse()`, `client.trace_parameter()`, `client.state()`
 - All search/graph/state logic importable without copying scripts
 - Scripts remain as standalone CLI entry points (no breaking changes)
-- 35 tests covering library + CLI smoke tests
+- 35 tests covering library + CLI smoke tests (suite has since grown to 151 across `tests/`)
 
 **Phase 4 highlights:**
 - `ai_memory/learn.py` — full learn pipeline as importable library (`parse_learned_topics`, `sync_facts`, `rebuild_graph`)
@@ -134,6 +134,7 @@ See [README — Library section](#library-phase-3) and [MIGRATION.md](./MIGRATIO
 4. **Copy documentation:**
    ```bash
    cp -r docs ~/.ai-memory/
+   cp BOOTSTRAP.md ~/.ai-memory/
    ```
 
 5. **Start Neo4j (Docker):**
@@ -196,7 +197,7 @@ ai-memory-system/
 ├── README.md
 ├── BOOTSTRAP.md              # First-run instructions for new AI
 ├── UPGRADE_PLAN.md           # Phased evolution roadmap
-├── pyproject.toml            # Package definition (v1.0.0) + `ai-memory` CLI entry point
+├── pyproject.toml            # Package definition + `ai-memory` CLI entry point
 ├── CHANGELOG.md              # Version history
 ├── MIGRATION.md              # Upgrade guide for existing users
 ├── requirements.txt
@@ -218,17 +219,22 @@ ai-memory-system/
 │       └── setup.qmd         # Submind environment + multi-mind commands
 ├── ai_memory/                # Importable Python library (Phase 3)
 │   ├── __init__.py           # MemoryClient facade + all re-exports
-│   ├── _config.py            # get_workspace, get_driver
+│   ├── _config.py            # get_workspace, get_driver, validate_schema, get_query_timeout
 │   ├── metadata.py           # apply_metadata_only, apply_fields_filter, make_teaser
 │   ├── search.py             # search_vector, search_graph, search_files, search_faiss
 │   ├── graph.py              # traverse, trace_parameter, graph_stats
-│   └── state.py              # MemoryStateManager (per-session lazy loading)
+│   ├── state.py              # MemoryStateManager (per-session lazy loading)
+│   ├── learn.py              # parse_learned_topics, sync_facts, rebuild_graph
+│   ├── provenance.py         # Provenance dataclass (see docs/PROVENANCE.md)
+│   └── exceptions.py         # AIMemoryError, Neo4jConnectionError, …
 ├── scripts/
 │   ├── cli.py                # Unified ai-memory CLI (Phase 6)
 │   ├── neo4j_seed.py         # Initialize Neo4j schema + indexes
 │   ├── neo4j_backfill_assistant.py  # Migrate existing graph for multi-mind (Phase 2)
 │   ├── hybrid_memory_search.py      # Search: vector + graph + FAISS + files
 │   ├── neo4j_sync.py                # Sync sessions → knowledge graph
+│   ├── verify_schema.py             # Check live Neo4j schema against expectations
+│   ├── migrate_to_name_keying.py    # One-time migration to name-keyed Facts
 │   └── rlm/                  # Phase 4 — advanced RLM tools (experimental)
 │       ├── neo4j_traverse.py # Rich graph traversal + parameter tracing
 │       ├── memory_state.py   # Per-session lazy loading state
@@ -245,13 +251,17 @@ ai-memory-system/
 │   ├── ARCHITECTURE.md
 │   ├── CRON_JOBS.md
 │   ├── LEARNER.md
+│   ├── PROVENANCE.md         # Origin/trust metadata on Facts
 │   ├── RLM.md                # Phase 4 RLM patterns
 │   ├── SUBMINDS.md           # Phase 2 multi-mind guide
 │   ├── PHASE2-MULTI-TENANCY.md
 │   └── PHASE2-SCHEMA-PROPOSAL.md
 └── tests/
     ├── test_cli_smoke.py     # CLI smoke tests (no Neo4j required)
-    └── test_library.py       # Library smoke tests (no Neo4j required)
+    ├── test_library.py       # Library smoke tests (no Neo4j required)
+    ├── test_learn.py         # Learn pipeline parsing tests
+    ├── test_provenance.py    # Provenance dataclass tests
+    └── test_verify_schema.py # Schema verification tests
 ```
 
 ---
@@ -302,6 +312,12 @@ with MemoryClient() as client:
     # RLM parameter tracing
     matches = client.trace_parameter("Avellaneda-Stoikov", "gamma")
 
+    # Direct Fact write with provenance (see docs/PROVENANCE.md)
+    from ai_memory.provenance import Provenance
+    client.write("some-fact", summary="...",
+                 provenance=Provenance(source="web_fetch", trust="suspicious"))
+    results = client.search("some fact", trust_filter="trusted")
+
 # Low-level functions are also importable directly:
 from ai_memory.search import search_vector, search_files
 from ai_memory.graph import traverse, trace_parameter, graph_stats
@@ -324,6 +340,8 @@ ai-memory search "attention mechanisms" --assistant Weft
 ai-memory traverse --start "Attention Is All You Need" --parameter gamma
 ai-memory learn-sync --days 7 --assistant Weft
 ai-memory state --pending --session "weft:main"
+ai-memory sync --assistant Weft    # markdown sessions → Neo4j (--full to re-sync all)
+ai-memory backfill --primary Weft  # multi-mind migration of an existing graph
 ```
 
 This is a thin, consistent wrapper over the individual scripts. All existing flags continue to work.
@@ -387,11 +405,9 @@ python3 ~/.ai-memory/scripts/neo4j_sync.py --full  # Force full sync
 ```
 
 ### Cron jobs not running
-```bash
-cron list  # Check job status
-# Verify job is enabled: true
-# Check consecutiveErrors count
-```
+Check job status with whatever scheduler you registered them under (crontab,
+systemd timers, an agent platform) — see `docs/CRON_JOBS.md` for the health
+signals to watch.
 
 ---
 
