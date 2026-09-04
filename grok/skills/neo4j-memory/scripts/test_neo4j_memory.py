@@ -641,6 +641,34 @@ class SharedWritePlan(unittest.TestCase):
         )
 
 
+class PlainWriteRefusesShared(unittest.TestCase):
+    def test_plain_write_cannot_overwrite_shared_fact(self):
+        ran = []
+
+        class Sess(_Sess):
+            def run(self, q, **kw):
+                ran.append(q)
+                if "RETURN f.assistant AS a" in q:
+                    return mock.Mock(single=lambda: {"a": "Grok", "space": "shared"})
+                raise AssertionError("write proceeded past the shared-space guard")
+
+        class Drv:
+            def session(self):
+                return Sess()
+
+            def close(self):
+                pass
+
+        args = nm.build_parser().parse_args([
+            "write", "--name", "Shared — Foo — 2026-08-30",
+            "--summary", "clobbered", "--no-embed",
+        ])
+        with mock.patch.object(nm, "_driver", lambda **k: (Drv(), {})):
+            rc = nm.cmd_write(args)
+        self.assertEqual(rc, 3)
+        self.assertEqual(len(ran), 1)
+
+
 class SharedRemovePlan(unittest.TestCase):
     def test_refuse_library(self):
         plan = nm._plan_shared_remove(

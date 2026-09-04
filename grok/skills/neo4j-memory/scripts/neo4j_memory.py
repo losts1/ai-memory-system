@@ -880,10 +880,19 @@ def cmd_write(args: argparse.Namespace) -> int:
     try:
         with drv.session() as s:
             existing = s.run(
-                "MATCH (f:Fact {name: $name}) RETURN f.assistant AS a",
+                "MATCH (f:Fact {name: $name}) RETURN f.assistant AS a, f.space AS space",
                 name=name,
             ).single()
             if existing:
+                if existing["space"] == SHARED_SPACE:
+                    # Shared Facts are never overwritten in place; the plain
+                    # write path must not bypass supersede/append/tombstone.
+                    print(
+                        f"refused: Fact {name!r} is in space=shared; "
+                        "use --space shared with --supersede or --append",
+                        file=sys.stderr,
+                    )
+                    return 3
                 block = _owner_blocks_write(
                     existing["a"], assistant, args.force_assistant,
                 )
