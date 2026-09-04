@@ -322,6 +322,55 @@ def test_get_driver_raises_connection_error_on_bad_uri(monkeypatch, tmp_path):
         assert "127.0.0.1:1" in msg
 
 
+def test_get_driver_passes_notification_mute(monkeypatch, tmp_path):
+    """The mute was gated on inspect.signature(GraphDatabase.driver), whose
+    signature is (uri, *, auth, **config) — so it never applied. It must now
+    reach the driver unconditionally, defaulting to OFF."""
+    monkeypatch.setenv("NEO4J_PASSWORD", "irrelevant")
+    monkeypatch.delenv("NEO4J_NOTIFICATIONS_MIN_SEVERITY", raising=False)
+    (tmp_path / ".env.neo4j").write_text("")
+    from ai_memory import _config
+
+    seen = {}
+
+    class FakeDriver:
+        def verify_connectivity(self):
+            pass
+
+    def fake_driver(uri, auth=None, **kw):
+        seen.update(kw)
+        return FakeDriver()
+
+    monkeypatch.setattr(_config.GraphDatabase, "driver", fake_driver)
+    _config.get_driver(workspace=tmp_path)
+    assert seen.get("notifications_min_severity") == "OFF"
+
+
+def test_get_driver_retries_without_mute_on_old_driver(monkeypatch, tmp_path):
+    """A driver that rejects notifications_min_severity gets a second call without it."""
+    monkeypatch.setenv("NEO4J_PASSWORD", "irrelevant")
+    (tmp_path / ".env.neo4j").write_text("")
+    from neo4j.exceptions import ConfigurationError
+    from ai_memory import _config
+
+    calls = []
+
+    class FakeDriver:
+        def verify_connectivity(self):
+            pass
+
+    def fake_driver(uri, auth=None, **kw):
+        calls.append(dict(kw))
+        if "notifications_min_severity" in kw:
+            raise ConfigurationError("Unexpected config keys: notifications_min_severity")
+        return FakeDriver()
+
+    monkeypatch.setattr(_config.GraphDatabase, "driver", fake_driver)
+    _config.get_driver(workspace=tmp_path)
+    assert len(calls) == 2
+    assert "notifications_min_severity" not in calls[1]
+
+
 def test_memory_client_close_releases_cached_driver(tmp_path, monkeypatch):
     """Issue #N1: close() must actually close the driver if one was created.
     We don't connect for real; the driver is None until first use."""

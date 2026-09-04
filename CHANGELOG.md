@@ -20,6 +20,15 @@ Versioning follows [SemVer](https://semver.org/).
   `history`), `embed` backfill, per-mind organize. 47 offline unit tests.
   Does not require `pip install -e .`.
 
+### Fixed
+- **`_config.py` never muted server notifications.** `_driver_kwargs` gated
+  `notifications_min_severity` on `inspect.signature(GraphDatabase.driver)`,
+  whose signature is `(uri, *, auth, **config)`, so the key was never found
+  and every "property does not exist" ping reached stderr. The kwarg is now
+  always passed (default `OFF`; a `WARNING` floor would not have muted those
+  pings, which are severity WARNING) and `get_driver` retries without it on
+  drivers older than 5.6. Two tests cover both paths.
+
 ## [1.3.3] - 2026-06-05
 
 QA audit round 8 — broad inconsistency sweep across all library and script

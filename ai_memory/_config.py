@@ -1,5 +1,4 @@
 """Shared Neo4j connection and workspace config for the ai_memory library."""
-import inspect
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -35,26 +34,25 @@ def get_query_timeout() -> float:
 
 
 def _driver_kwargs() -> dict:
-    """Driver kwargs, including notification mute when supported.
+    """Driver kwargs, including the server-notification mute.
 
-    `notifications_min_severity` was added in neo4j-python 5.6. Older drivers
-    don't accept it; detect and degrade gracefully.
+    ``notifications_min_severity`` was added in neo4j-python 5.6. It cannot be
+    detected from ``GraphDatabase.driver``'s signature, which is
+    ``(uri, *, auth, **config)``, so it is always included here and
+    ``get_driver`` retries without it if the driver rejects it.
+
+    Default ``OFF``: the per-query "property does not exist" pings are severity
+    WARNING, so a WARNING floor does not mute them. Override with
+    ``NEO4J_NOTIFICATIONS_MIN_SEVERITY`` (OFF, WARNING, INFORMATION).
     """
-    kwargs = dict(
+    return dict(
         max_connection_pool_size=_DEFAULT_POOL_SIZE,
         max_connection_lifetime=_DEFAULT_CONNECTION_LIFETIME,
         connection_acquisition_timeout=30,
+        notifications_min_severity=os.getenv(
+            "NEO4J_NOTIFICATIONS_MIN_SEVERITY", "OFF"
+        ),
     )
-    try:
-        sig = inspect.signature(GraphDatabase.driver)
-        if "notifications_min_severity" in sig.parameters:
-            # WARNING mutes the chatty per-query "property does not exist" pings.
-            kwargs["notifications_min_severity"] = os.getenv(
-                "NEO4J_NOTIFICATIONS_MIN_SEVERITY", "WARNING"
-            )
-    except (TypeError, ValueError):
-        pass
-    return kwargs
 
 
 def get_driver(workspace=None):
@@ -83,7 +81,15 @@ def get_driver(workspace=None):
         )
 
     try:
-        driver = GraphDatabase.driver(uri, auth=(user, password), **_driver_kwargs())
+        kwargs = _driver_kwargs()
+        try:
+            driver = GraphDatabase.driver(uri, auth=(user, password), **kwargs)
+        except ConfigurationError:
+            # neo4j-python < 5.6 rejects the notification kwarg; retry without.
+            # A ConfigurationError for any other reason (bad URI scheme) recurs
+            # here and falls through to the outer handler.
+            kwargs.pop("notifications_min_severity", None)
+            driver = GraphDatabase.driver(uri, auth=(user, password), **kwargs)
         driver.verify_connectivity()
         return driver
     except AuthError as e:
