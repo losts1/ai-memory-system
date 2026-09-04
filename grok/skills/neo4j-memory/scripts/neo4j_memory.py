@@ -10,7 +10,6 @@ the Neo4j vector index. Ollama down or a missing index → fulltext only.
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import os
 import re
@@ -24,7 +23,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 from neo4j import GraphDatabase, Query
-from neo4j.exceptions import DriverError, Neo4jError
+from neo4j.exceptions import ConfigurationError, DriverError, Neo4jError
 
 _BOLT_FAIL = (Neo4jError, DriverError)
 
@@ -121,16 +120,20 @@ def _driver(connect_timeout: float | None = None):
         kw["connection_timeout"] = connect_timeout
         kw["connection_acquisition_timeout"] = connect_timeout
     # Server notifications ("property key does not exist", index hints) are
-    # logged to stderr by the driver and read as errors by a TUI model. The
-    # kwarg exists since neo4j-python 5.6; degrade gracefully on older drivers.
+    # logged to stderr by the driver and read as errors by a TUI model.
+    # notifications_min_severity exists since neo4j-python 5.6. The driver
+    # signature is (uri, *, auth, **config), so the key cannot be detected by
+    # inspection; try it and fall back for older drivers that reject it.
     try:
-        if "notifications_min_severity" in inspect.signature(GraphDatabase.driver).parameters:
-            kw["notifications_min_severity"] = "OFF"
-    except (TypeError, ValueError):
-        pass
-    return GraphDatabase.driver(
-        c["uri"], auth=(c["user"], c["password"]), **kw,
-    ), c
+        drv = GraphDatabase.driver(
+            c["uri"], auth=(c["user"], c["password"]),
+            notifications_min_severity="OFF", **kw,
+        )
+    except (ConfigurationError, TypeError):
+        drv = GraphDatabase.driver(
+            c["uri"], auth=(c["user"], c["password"]), **kw,
+        )
+    return drv, c
 
 
 def _daemon_submit(fn, *args) -> Future:
