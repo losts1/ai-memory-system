@@ -26,8 +26,14 @@ Versioning follows [SemVer](https://semver.org/).
   grade-2-vs-not calibration against a golden set (gate 0.8), nDCG@k /
   Recall@k / MRR, and a JSON judgment cache keyed on the prompt hash so a
   re-calibrated prompt never reuses old grades. The HTTP call is injected; the
-  package has no network dependency. 35 offline tests. Calibrated live on the
-  production graph with Qwen 3.8: 0.96 agreement over 25 items.
+  package has no network dependency. Calibrated live on the production graph
+  with Qwen 3.8: 1.0 agreement over 25 items after the external design review
+  (Grok 4.6) forced four fixes — nDCG ideal is taken over the whole judged pool
+  (a ranker that misses a judged grade-2 can no longer score 1.0); a reply that
+  omits any candidate is malformed and retried, never silently graded 0; the
+  superseded rule is absolute so cached grades do not depend on list siblings;
+  and `passes_ship_gate` requires Recall@5 as well as nDCG@5 not to drop.
+  41 offline tests.
 
 ### Fixed
 - **`_config.py` never muted server notifications.** `_driver_kwargs` gated

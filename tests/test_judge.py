@@ -16,6 +16,7 @@ from ai_memory.eval.judge import (
     mrr,
     ndcg_at_k,
     parse_judgments,
+    passes_ship_gate,
     recall_at_k,
 )
 
@@ -36,6 +37,14 @@ def test_system_prompt_states_three_grades_and_json_only():
         assert f'"grade": {g}' in JUDGE_SYSTEM_PROMPT or f"grade {g}" in JUDGE_SYSTEM_PROMPT
     assert "JSON" in JUDGE_SYSTEM_PROMPT
     assert "superseded" in JUDGE_SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_superseded_rule_is_list_independent():
+    """Grades are cached per fact, so a rule that depends on which siblings
+    happen to be in the list would make the cache wrong."""
+    low = JUDGE_SYSTEM_PROMPT.lower()
+    assert "present in the list" not in low
+    assert "regardless" in low
 
 
 # ── prompt builder ───────────────────────────────────────────────────────────
@@ -84,9 +93,15 @@ def test_parse_clean_json_array():
         {"name": "Alpha", "grade": 2, "why": "direct"},
         {"name": "Beta", "grade": 0, "why": "superseded"},
     ])
-    out = parse_judgments(text, {"Alpha", "Beta", "Gamma"})
+    out = parse_judgments(text, {"Alpha", "Beta"})
     assert out == {"Alpha": {"grade": 2, "why": "direct"},
                    "Beta": {"grade": 0, "why": "superseded"}}
+
+
+def test_parse_fails_closed_when_a_candidate_is_omitted():
+    """An omitted candidate must not silently become grade 0."""
+    text = json.dumps([{"name": "Alpha", "grade": 2, "why": "direct"}])
+    assert parse_judgments(text, {"Alpha", "Beta"}) is None
 
 
 def test_parse_tolerates_fences_and_prose():
@@ -156,6 +171,14 @@ def test_ndcg_no_relevant_items_is_zero():
     assert ndcg_at_k(["a", "b"], {"a": 0, "b": 0}, 2) == 0.0
 
 
+def test_ndcg_penalises_a_ranker_that_misses_a_judged_grade2():
+    """IDCG is over every judged grade for the query, so retrieving only the
+    grade-1 item cannot score 1.0 while a grade-2 item sits unretrieved."""
+    grades = {"a": 1, "z": 2}
+    assert ndcg_at_k(["a", "b"], grades, 2) < 1.0
+    assert ndcg_at_k(["z", "a"], grades, 2) == pytest.approx(1.0)
+
+
 def test_ndcg_unjudged_names_count_as_zero():
     grades = {"a": 2}
     assert ndcg_at_k(["x", "a"], grades, 2) < ndcg_at_k(["a", "x"], grades, 2)
@@ -173,6 +196,33 @@ def test_recall_at_k_with_no_grade2_is_zero():
 def test_mrr_is_reciprocal_rank_of_first_grade2():
     assert mrr(["b", "a"], {"a": 2, "b": 1}) == pytest.approx(0.5)
     assert mrr(["b"], {"a": 2, "b": 1}) == 0.0
+
+
+# ── ship gate ────────────────────────────────────────────────────────────────
+
+def _m(ndcg, recall):
+    return {"ndcg5": ndcg, "recall5": recall}
+
+
+def test_ship_gate_passes_when_nothing_drops_and_judged_rises():
+    assert passes_ship_gate(
+        before={"golden": _m(0.6, 0.5), "judged": _m(0.6, 0.5)},
+        after={"golden": _m(0.6, 0.5), "judged": _m(0.7, 0.6)},
+    )
+
+
+def test_ship_gate_fails_when_golden_recall_drops_even_if_ndcg_rises():
+    assert not passes_ship_gate(
+        before={"golden": _m(0.6, 0.5), "judged": _m(0.6, 0.5)},
+        after={"golden": _m(0.7, 0.4), "judged": _m(0.7, 0.6)},
+    )
+
+
+def test_ship_gate_fails_when_judged_drops():
+    assert not passes_ship_gate(
+        before={"golden": _m(0.6, 0.5), "judged": _m(0.6, 0.5)},
+        after={"golden": _m(0.6, 0.5), "judged": _m(0.5, 0.5)},
+    )
 
 
 # ── cache + judge_query ──────────────────────────────────────────────────────
