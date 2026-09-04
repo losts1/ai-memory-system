@@ -57,6 +57,44 @@ Example. QUERY: "how do we stop the maker bot from buying below the reserve bala
 """
 
 
+EDGE_SYSTEM_PROMPT = """\
+You are a relatedness judge for a personal knowledge graph used by AI assistants.
+You receive one SOURCE fact (as the QUERY) and a numbered list of candidate FACTS.
+Grade how useful a link from the source to each candidate would be to someone
+exploring the graph from the source. This is NOT "does the candidate answer the
+source"; it is "does the candidate belong next to it".
+
+Grades:
+- grade 2: same topic or the same mechanism, setting, entity or decision seen from another angle, a direct prerequisite, or a direct consequence. A reader of the source would want this next.
+- grade 1: shares a concrete entity, mechanism, prerequisite, or is a meaningful contrast or alternative to it. Worth one hop away.
+- grade 0: only shares a broad domain or generic vocabulary (both about trading, both about Python), or is unrelated.
+
+Rules:
+- Judge on the text shown. Do not reward length, recency wording, or the assistant tag.
+- Shared generic words (model, system, data, analysis, market) are not a relation. A shared specific thing (VPIN, the reserve guard, a named algorithm, the same failure) is.
+- A superseded or removed candidate is graded like any other; status alone does not change the grade.
+- Output ONLY a JSON array, no prose, no markdown fences. One object per candidate, every candidate included:
+  [{"name": "<exact candidate name>", "grade": 0|1|2, "why": "<under 120 chars>"}]
+
+Example. SOURCE: "Queue Position & Fill Probability in the LOB"
+[{"name": "Fill Probability Models & Queue Position", "grade": 2, "why": "same mechanism, other angle"},
+ {"name": "Adverse Selection in Fill Timing", "grade": 1, "why": "shares fill mechanics, different question"},
+ {"name": "Kelly Criterion & Position Sizing", "grade": 0, "why": "both trading; no shared mechanism"}]
+"""
+
+RUBRICS = ("retrieval", "edge")
+
+
+def _rubric_prompt(rubric: str) -> str:
+    # Resolved at call time (not a dict of constants) so a monkeypatched prompt
+    # is honoured, which is also what the cache-key tests rely on.
+    if rubric == "retrieval":
+        return JUDGE_SYSTEM_PROMPT
+    if rubric == "edge":
+        return EDGE_SYSTEM_PROMPT
+    raise ValueError(f"unknown rubric {rubric!r}; expected one of {RUBRICS}")
+
+
 # ── text shown to the judge ──────────────────────────────────────────────────
 
 def judge_fact_text(fact: dict) -> str:
@@ -75,14 +113,18 @@ def judge_fact_text(fact: dict) -> str:
     return "\n".join(lines)
 
 
-def build_judge_messages(query: str, candidates: List[dict], seed: int = 0) -> List[dict]:
-    """System + user messages. Candidate order is shuffled by ``seed``."""
+def build_judge_messages(query: str, candidates: List[dict], seed: int = 0, rubric: str = "retrieval") -> List[dict]:
+    """System + user messages. Candidate order is shuffled by ``seed``.
+    ``rubric`` is "retrieval" (does the fact answer the query) or "edge"
+    (is the fact related to the source fact given as the query)."""
+    system = _rubric_prompt(rubric)
     order = list(candidates)
     random.Random(seed).shuffle(order)
     blocks = [f"[{i}]\n{judge_fact_text(c)}" for i, c in enumerate(order, 1)]
-    user = f"QUERY: {query.strip()}\n\nCANDIDATES:\n\n" + "\n\n".join(blocks) + "\n\nJSON array:"
+    label = "SOURCE" if rubric == "edge" else "QUERY"
+    user = f"{label}: {query.strip()}\n\nCANDIDATES:\n\n" + "\n\n".join(blocks) + "\n\nJSON array:"
     return [
-        {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+        {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
 
@@ -124,12 +166,14 @@ def parse_judgments(text: str, expected_names: Iterable[str]) -> Optional[Dict[s
 
 # ── calibration ──────────────────────────────────────────────────────────────
 
-def calibration_agreement(judge_grades: Dict[str, int], human_grades: Dict[str, int]) -> float:
-    """Fraction of shared keys where judge and human agree on grade-2 vs not-2."""
+def calibration_agreement(judge_grades: Dict[str, int], human_grades: Dict[str, int], boundary: int = 2) -> float:
+    """Fraction of shared keys where judge and human agree on ``grade >= boundary``.
+    Retrieval calibrates the grade-2 boundary; edge relatedness calibrates
+    ``boundary=1`` (related vs unrelated), which is the decision an edge encodes."""
     shared = set(judge_grades) & set(human_grades)
     if not shared:
         return 0.0
-    hits = sum(1 for k in shared if (judge_grades[k] == 2) == (human_grades[k] == 2))
+    hits = sum(1 for k in shared if (judge_grades[k] >= boundary) == (human_grades[k] >= boundary))
     return hits / len(shared)
 
 
@@ -189,17 +233,17 @@ class JudgeCache:
                 self._d = {}
 
     @staticmethod
-    def key(model: str, query: str, name: str, text: str) -> str:
-        # The system prompt is part of the key: a re-calibrated prompt must
-        # never be served grades produced by the old one.
-        prompt_id = hashlib.sha256(JUDGE_SYSTEM_PROMPT.encode()).hexdigest()[:16]
+    def key(model: str, query: str, name: str, text: str, rubric: str = "retrieval") -> str:
+        # The rubric's system prompt is part of the key: a re-calibrated or
+        # different prompt must never be served grades produced by another.
+        prompt_id = hashlib.sha256(_rubric_prompt(rubric).encode()).hexdigest()[:16]
         return hashlib.sha256("\x1f".join((prompt_id, model, query, name, text)).encode()).hexdigest()
 
-    def get(self, model, query, name, text) -> Optional[dict]:
-        return self._d.get(self.key(model, query, name, text))
+    def get(self, model, query, name, text, rubric: str = "retrieval") -> Optional[dict]:
+        return self._d.get(self.key(model, query, name, text, rubric))
 
-    def put(self, model, query, name, text, judgment: dict) -> None:
-        self._d[self.key(model, query, name, text)] = judgment
+    def put(self, model, query, name, text, judgment: dict, rubric: str = "retrieval") -> None:
+        self._d[self.key(model, query, name, text, rubric)] = judgment
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,14 +262,16 @@ def judge_query(
     model: str,
     cache: Optional[JudgeCache] = None,
     seed: int = 0,
+    rubric: str = "retrieval",
 ) -> Optional[Dict[str, dict]]:
     """Grade ``candidates`` for ``query``. Cached candidates are not re-sent.
     Returns {name: {"grade", "why"}} or None if the model failed twice."""
+    _rubric_prompt(rubric)  # validate early
     out: Dict[str, dict] = {}
     todo: List[dict] = []
     for c in candidates:
         text = judge_fact_text(c)
-        hit = cache.get(model, query, c["name"], text) if cache else None
+        hit = cache.get(model, query, c["name"], text, rubric) if cache else None
         if hit is not None:
             out[c["name"]] = hit
         else:
@@ -238,7 +284,7 @@ def judge_query(
         names = {c["name"] for c in batch}
         parsed = None
         for attempt in range(2):
-            reply = call(build_judge_messages(query, batch, seed=seed + attempt))
+            reply = call(build_judge_messages(query, batch, seed=seed + attempt, rubric=rubric))
             parsed = parse_judgments(reply, names)
             if parsed is not None:
                 break
@@ -250,7 +296,7 @@ def judge_query(
                 continue
             out[c["name"]] = j
             if cache:
-                cache.put(model, query, c["name"], judge_fact_text(c), j)
+                cache.put(model, query, c["name"], judge_fact_text(c), j, rubric)
     if cache:
         cache.save()
     return out

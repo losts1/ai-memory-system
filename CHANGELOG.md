@@ -33,7 +33,11 @@ Versioning follows [SemVer](https://semver.org/).
   omits any candidate is malformed and retried, never silently graded 0; the
   superseded rule is absolute so cached grades do not depend on list siblings;
   and `passes_ship_gate` requires Recall@5 as well as nDCG@5 not to drop.
-  41 offline tests.
+  A second rubric, `EDGE_SYSTEM_PROMPT` (relatedness: same mechanism /
+  shared entity / prerequisite / contrast), selected with `rubric="edge"` on
+  `build_judge_messages`, `judge_query` and the cache key, with
+  `calibration_agreement(..., boundary=1)` for the related-vs-unrelated
+  boundary an edge encodes. 47 offline tests.
 
 ### Fixed
 - **`_config.py` never muted server notifications.** `_driver_kwargs` gated

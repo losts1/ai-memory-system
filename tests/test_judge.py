@@ -8,6 +8,7 @@ import pytest
 
 from ai_memory.eval.judge import (
     CALIBRATION_THRESHOLD,
+    EDGE_SYSTEM_PROMPT,
     JUDGE_SYSTEM_PROMPT,
     JudgeCache,
     build_judge_messages,
@@ -45,6 +46,52 @@ def test_system_prompt_superseded_rule_is_list_independent():
     low = JUDGE_SYSTEM_PROMPT.lower()
     assert "present in the list" not in low
     assert "regardless" in low
+
+
+def test_edge_rubric_defines_relatedness_not_answering():
+    """Edges are judged for relatedness (same mechanism, shared entity,
+    prerequisite, contrast), a different task from answering a query."""
+    low = EDGE_SYSTEM_PROMPT.lower()
+    for word in ("mechanism", "prerequisite", "contrast"):
+        assert word in low
+    assert "answers the query" not in low
+    assert "JSON" in EDGE_SYSTEM_PROMPT
+
+
+def test_build_messages_selects_rubric():
+    assert build_judge_messages("q", CANDS)[0]["content"] == JUDGE_SYSTEM_PROMPT
+    assert build_judge_messages("q", CANDS, rubric="edge")[0]["content"] == EDGE_SYSTEM_PROMPT
+
+
+def test_unknown_rubric_rejected():
+    with pytest.raises(ValueError):
+        build_judge_messages("q", CANDS, rubric="nope")
+
+
+def test_cache_key_differs_between_rubrics(tmp_path):
+    c = JudgeCache(tmp_path / "c.json")
+    c.put("m", "q", "Alpha", "text", {"grade": 2, "why": "ok"})
+    assert c.get("m", "q", "Alpha", "text") is not None
+    assert c.get("m", "q", "Alpha", "text", rubric="edge") is None
+
+
+def test_judge_query_uses_edge_rubric_when_asked():
+    seen = []
+
+    def call(messages):
+        seen.append(messages[0]["content"])
+        return json.dumps([{"name": c["name"], "grade": 1, "why": "r"} for c in CANDS])
+
+    judge_query("q", CANDS, call, model="m", rubric="edge")
+    assert seen == [EDGE_SYSTEM_PROMPT]
+
+
+def test_calibration_agreement_on_related_boundary():
+    """For edges the boundary that matters is 0 vs >=1, not 2 vs not."""
+    judge = {"a": 1, "b": 2, "c": 0, "d": 1}
+    human = {"a": 2, "b": 0, "c": 0, "d": 1}
+    assert calibration_agreement(judge, human, boundary=1) == pytest.approx(3 / 4)
+    assert calibration_agreement(judge, human) == pytest.approx(2 / 4)
 
 
 # ── prompt builder ───────────────────────────────────────────────────────────
