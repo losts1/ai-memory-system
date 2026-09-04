@@ -10,6 +10,7 @@ the Neo4j vector index. Ollama down or a missing index → fulltext only.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import re
@@ -119,6 +120,14 @@ def _driver(connect_timeout: float | None = None):
     if connect_timeout is not None:
         kw["connection_timeout"] = connect_timeout
         kw["connection_acquisition_timeout"] = connect_timeout
+    # Server notifications ("property key does not exist", index hints) are
+    # logged to stderr by the driver and read as errors by a TUI model. The
+    # kwarg exists since neo4j-python 5.6; degrade gracefully on older drivers.
+    try:
+        if "notifications_min_severity" in inspect.signature(GraphDatabase.driver).parameters:
+            kw["notifications_min_severity"] = "OFF"
+    except (TypeError, ValueError):
+        pass
     return GraphDatabase.driver(
         c["uri"], auth=(c["user"], c["password"]), **kw,
     ), c

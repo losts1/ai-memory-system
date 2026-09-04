@@ -641,6 +641,23 @@ class SharedWritePlan(unittest.TestCase):
         )
 
 
+class DriverMutesNotifications(unittest.TestCase):
+    def test_driver_disables_server_notifications(self):
+        seen = {}
+
+        def fake_driver(uri, auth=None, **kw):
+            seen.update(kw)
+            return "drv"
+
+        cfg = {"uri": "bolt://x:7687", "user": "u", "password": "p"}
+        with mock.patch.object(nm, "_cfg", lambda: cfg), \
+             mock.patch.object(nm.GraphDatabase, "driver", fake_driver):
+            drv, _ = nm._driver(connect_timeout=1.5)
+        self.assertEqual(drv, "drv")
+        self.assertEqual(seen.get("notifications_min_severity"), "OFF")
+        self.assertEqual(seen.get("connection_timeout"), 1.5)
+
+
 class PlainWriteRefusesShared(unittest.TestCase):
     def test_plain_write_cannot_overwrite_shared_fact(self):
         ran = []
