@@ -64,10 +64,22 @@ Discover index names on the live DB (do not assume `fact_embeddings`):
 SHOW INDEXES YIELD name, type
 ```
 
-A production graph in this lineage used `factEmbeddingIndex` (VECTOR) and
-`fact_content` (FULLTEXT). Put those names in `.env.neo4j` if they differ from
-the example. The CLI search path is **fulltext only** (fast enough for a hook).
-Vector search is not required for this wiring.
+A production graph in this lineage used `factEmbeddingIndex` (VECTOR, 768-d
+cosine), `fact_content` (FULLTEXT on name/content/summary) and `fact_key_points`
+(FULLTEXT on the `key_points` list). Put those names in `.env.neo4j` if they
+differ from the example. `neo4j_seed.py` does not create `fact_key_points`; if
+`SHOW INDEXES` lacks it, create it (search degrades to `fact_content` only
+without it):
+
+```cypher
+CREATE FULLTEXT INDEX fact_key_points IF NOT EXISTS FOR (f:Fact) ON EACH [f.key_points]
+```
+
+CLI search is **hybrid** (fulltext + Ollama
+`nomic-embed-text` against the vector index, RRF fusion). Ollama down or a
+missing index → fulltext only. The prompt hook uses the same hybrid path with a
+5s shared deadline (3s embed / 4s Bolt / 1.5s connect, daemon workers) so it
+can rewrite `neo4j-hits.md` before the 8s UserPromptSubmit kill.
 
 ### 3. Reload hooks
 
@@ -112,7 +124,7 @@ A write to a Fact name owned by another assistant **must** exit 3 (`refused`).
 | Event | Script | Effect |
 |---|---|---|
 | `SessionStart` | `hook-session` | Writes `~/.grok/neo4j-session.md` (counts + recent names). Stdout ignored. |
-| `UserPromptSubmit` | `hook-prompt` | Fulltext-searches the prompt, writes `~/.grok/neo4j-hits.md`. Stdout ignored. Fail-open (exit 0). |
+| `UserPromptSubmit` | `hook-prompt` | Hybrid-searches the prompt (fulltext + vector), writes `~/.grok/neo4j-hits.md`. Stdout ignored. Fail-open (exit 0). |
 | `Stop` (`reason=end_turn` only) | `hook-stop` | Appends `~/.grok/neo4j-inbox.jsonl`. Does **not** write Facts. |
 
 The **home rule** is what actually wires the model: on knowledge questions, read
@@ -122,15 +134,18 @@ The **skill** (`/neo4j-memory`) is the write/organize path.
 
 ```bash
 python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py search "QUERY"
+python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py search "QUERY" --mode vector
+python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py embed --dry-run
 python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py write \
   --assistant Grok --name "Title" --summary "Durable sentence." --point "detail"
 python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py organize --assistant Grok
 ```
 
-`--assistant` is the mind tag (`Grok`, `Weft`, …). Search is unfiltered (all
-minds). Write MERGE on `Fact.name` and **refuses** if that name is already owned
-by a different assistant. `organize` adds `RELATED_TO` only among that mind's
-Facts that share ≥2 HAS_WORD tokens. It does not rebuild the rest of the graph.
+Search is unfiltered (all minds). Write/organize default to `assistant=Grok` and
+**refuse** `--assistant` other than Grok unless `--force-assistant`. Write MERGE
+on `Fact.name` also refuses if that name is already owned by a different
+assistant. `organize` adds `RELATED_TO` only among Grok Facts that share ≥2
+HAS_WORD tokens. It does not rebuild the rest of the graph.
 
 ## Rules you must keep
 
@@ -147,4 +162,4 @@ Facts that share ≥2 HAS_WORD tokens. It does not rebuild the rest of the graph
 - Claude Code Stop-hook distillation (`claude/`).
 - The `ai_memory` Python package / `ai-memory` CLI (repo root). This Grok wiring
   is a thin Bolt client so a TUI session can search without `pip install -e .`.
-- FAISS. Hook search is fulltext only.
+- FAISS. Vector search uses Neo4j `factEmbeddingIndex` + local Ollama, not FAISS.

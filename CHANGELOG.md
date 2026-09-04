@@ -12,8 +12,13 @@ Versioning follows [SemVer](https://semver.org/).
 ### Added
 - **`grok/`** — Grok Build TUI integration: copy-in skill, SessionStart /
   UserPromptSubmit / Stop hooks, home rule, and an LLM runbook
-  (`grok/README.md`) to repeat the Neo4j wiring. Thin Bolt CLI (fulltext
-  search, tagged write, per-mind organize). Does not require `pip install -e .`.
+  (`grok/README.md`) to repeat the Neo4j wiring. Thin Bolt CLI: hybrid search
+  (Lucene `fact_content` + `fact_key_points` fused with Ollama `nomic-embed-text`
+  KNN via RRF; vector-only cosine floor 0.80; fulltext-only when Ollama is down),
+  Grok-tagged write with `--force-assistant` override, shared space
+  (`--space shared`: dated add / `--supersede` / `--append` / tombstone `remove`,
+  `history`), `embed` backfill, per-mind organize. 47 offline unit tests.
+  Does not require `pip install -e .`.
 
 ## [1.3.3] - 2026-06-05
 
