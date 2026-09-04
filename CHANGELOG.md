@@ -20,6 +20,15 @@ Versioning follows [SemVer](https://semver.org/).
   `history`), `embed` backfill, per-mind organize. 47 offline unit tests.
   Does not require `pip install -e .`.
 
+- **`ai_memory.eval.judge`** — LLM relevance judge for retrieval evaluation:
+  fixed system prompt (three grades, JSON-only contract), prompt builder that
+  hides scores and shuffles candidates deterministically, defensive parser,
+  grade-2-vs-not calibration against a golden set (gate 0.8), nDCG@k /
+  Recall@k / MRR, and a JSON judgment cache keyed on the prompt hash so a
+  re-calibrated prompt never reuses old grades. The HTTP call is injected; the
+  package has no network dependency. 35 offline tests. Calibrated live on the
+  production graph with Qwen 3.8: 0.96 agreement over 25 items.
+
 ### Fixed
 - **`_config.py` never muted server notifications.** `_driver_kwargs` gated
   `notifications_min_severity` on `inspect.signature(GraphDatabase.driver)`,
