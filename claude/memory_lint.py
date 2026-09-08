@@ -47,6 +47,7 @@ import glob
 import os
 import re
 import sys
+import tempfile
 
 MEMORY_DIR = os.path.dirname(os.path.abspath(__file__))
 NON_MEMORY = {"MEMORY.md", "README.md", "IMPLEMENT-MEMORY-SYSTEM.md"}
@@ -211,7 +212,26 @@ Re-derive before acting: `git -C ~/trading rev-list --left-right --count origin/
 
 
 def selftest():
-    bad, good = inspect(FIXTURE_BAD), inspect(FIXTURE_GOOD)
+    # `dead_paths` asks the filesystem whether a named path is still there, so any
+    # fixture that names one is machine-dependent: `~/trading` exists on the machine
+    # these were recorded on and nowhere else, which made "corrected form is clean"
+    # pass here and fail for every other reader. Run the fixtures under a HOME we
+    # own and drive both branches of that check — absent first, so the detector has
+    # to flag it, then created. The negative half is the point: without it, "clean"
+    # would keep passing even if dead_paths were gutted to `return []`.
+    real_home = os.environ.get("HOME")
+    with tempfile.TemporaryDirectory() as home:
+        os.environ["HOME"] = home          # os.path.expanduser reads it on POSIX
+        try:
+            rotted = inspect(FIXTURE_GOOD)                  # ~/trading absent
+            os.makedirs(os.path.join(home, "trading"))
+            bad, good = inspect(FIXTURE_BAD), inspect(FIXTURE_GOOD)
+        finally:
+            if real_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = real_home
+
     bad_kinds = {k for k, _ in bad}
     ok = True
     print("memory_lint self-test")
@@ -219,6 +239,9 @@ def selftest():
         hit = want in bad_kinds
         ok &= hit
         print(f"  known failure flags {want:<22} {'PASS' if hit else 'FAIL'}")
+    fires = "dead-path" in {k for k, _ in rotted}
+    ok &= fires
+    print(f"  flags a path that is gone{'':<15} {'PASS' if fires else 'FAIL'}")
     clean = not good
     ok &= clean
     print(f"  corrected form is clean{'':<17} {'PASS' if clean else 'FAIL — ' + str(good)}")
