@@ -1,0 +1,22 @@
+# ai-memory nightly: publish boilerplate + re-embed every Fact, then rebuild the
+# RELATED_TO edge layer under a new rule_version and cut over (spec §7.5).
+#
+# User unit. Install: see examples/systemd/README.md. Edit the three paths below
+# to match your checkout, venv and config directory before enabling.
+[Unit]
+Description=ai-memory nightly re-embed and edge rebuild
+# Neo4j and Ollama are separate services; the job fails fast (exit 1) if either is down.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Directory holding .env.neo4j (NEO4J_URI / credentials / NEO4J_VECTOR_INDEX).
+# Default workspace is ~/.ai-memory; point this at wherever your .env.neo4j lives.
+Environment=AI_MEMORY_DIR=%h/.ai-memory
+WorkingDirectory=%h/ai-memory-system
+# The venv must have the `edges` extra (numpy): pip install 'ai-memory-system[edges]'
+ExecStart=%h/ai-memory-system/venv/bin/ai-memory nightly --json %h/.ai-memory/nightly-last.json
+# Both steps are idempotent; a re-run after a failure is safe.
+TimeoutStartSec=30min
+Nice=10

@@ -56,6 +56,8 @@ EXPECTED_VECTOR_DIMS  = 768   # nomic-embed-text
 # Add similarity_function validation if strict similarity enforcement is needed.
 EXPECTED_FULLTEXT     = os.getenv("NEO4J_FULLTEXT_INDEX", "fact_content")
 EXPECTED_FULLTEXT_PROPS = {"name", "content", "summary"}
+EXPECTED_FULLTEXT_KP       = os.getenv("NEO4J_FULLTEXT_KP_INDEX", "fact_key_points")
+EXPECTED_FULLTEXT_KP_PROPS = {"key_points"}
 
 
 # ---------------------------------------------------------------------------
@@ -63,12 +65,13 @@ EXPECTED_FULLTEXT_PROPS = {"name", "content", "summary"}
 # ---------------------------------------------------------------------------
 
 def get_live_schema(driver):
-    """Return (constraints, indexes, vector, fulltext).
+    """Return (constraints, indexes, vector, fulltext, fulltext_kp).
 
     constraints : set[str]
     indexes     : dict[str, dict]  — {name: {type, properties: set[str]}}
     vector      : dict | None      — {name, dims} for EXPECTED_VECTOR_INDEX
     fulltext    : dict | None      — {name, properties: set[str]} for fact_content
+    fulltext_kp : dict | None      — {name, properties: set[str]} for fact_key_points
     """
     with driver.session() as session:
         result = session.run("SHOW CONSTRAINTS YIELD name RETURN name")
@@ -106,14 +109,22 @@ def get_live_schema(driver):
                 "properties": indexes[EXPECTED_FULLTEXT]["properties"],
             }
 
-    return constraints, indexes, vector, fulltext
+        # Fetch fulltext_kp index properties
+        fulltext_kp = None
+        if EXPECTED_FULLTEXT_KP in indexes:
+            fulltext_kp = {
+                "name": EXPECTED_FULLTEXT_KP,
+                "properties": indexes[EXPECTED_FULLTEXT_KP]["properties"],
+            }
+
+    return constraints, indexes, vector, fulltext, fulltext_kp
 
 
 # ---------------------------------------------------------------------------
 # Diff logic (pure — no Neo4j, fully testable)
 # ---------------------------------------------------------------------------
 
-def diff_schema(live_constraints, live_indexes, live_vector, live_fulltext):
+def diff_schema(live_constraints, live_indexes, live_vector, live_fulltext, live_fulltext_kp):
     """Return list of issue strings. Empty list = schema is valid.
 
     Extra indexes in live_indexes beyond EXPECTED_INDEXES are ignored;
@@ -155,6 +166,19 @@ def diff_schema(live_constraints, live_indexes, live_vector, live_fulltext):
                 f"DROP INDEX {EXPECTED_FULLTEXT} then re-run neo4j_seed.py"
             )
 
+    if live_fulltext_kp is None:
+        issues.append(
+            f"MISSING fulltext index: {EXPECTED_FULLTEXT_KP!r} — run neo4j_seed.py"
+        )
+    else:
+        missing_props = EXPECTED_FULLTEXT_KP_PROPS - live_fulltext_kp["properties"]
+        if missing_props:
+            issues.append(
+                f"Fulltext index {EXPECTED_FULLTEXT_KP!r} missing properties: "
+                f"{sorted(missing_props)} — "
+                f"DROP INDEX {EXPECTED_FULLTEXT_KP} then re-run neo4j_seed.py"
+            )
+
     return issues
 
 
@@ -164,6 +188,15 @@ def diff_schema(live_constraints, live_indexes, live_vector, live_fulltext):
 
 def _mark(ok):
     return "✓" if ok else "✗"
+
+
+def retrieval_config_issues(retrieval_config: str) -> list:
+    """`validate_schema()["retrieval_config"]` is "version N" or "missing". A missing
+    singleton makes every embedding writer and `ai-memory nightly` fail later, so it is
+    a schema issue (exit 1), not an informational line (review #8)."""
+    if retrieval_config == "missing":
+        return ["MISSING RetrievalConfig {id: 'current'} node — re-run neo4j_seed.py"]
+    return []
 
 
 def main():
@@ -185,13 +218,20 @@ def main():
         sys.exit(2)
 
     from neo4j import GraphDatabase
+
+    from ai_memory._config import validate_schema
+
     driver = GraphDatabase.driver(uri, auth=(username, password))
     try:
-        constraints, indexes, vector, fulltext = get_live_schema(driver)
+        constraints, indexes, vector, fulltext, fulltext_kp = get_live_schema(driver)
+        schema_status = validate_schema(driver)
+        retrieval_config = schema_status["retrieval_config"]
+        vector_filter_props = schema_status["vector_filter_props"]
     finally:
         driver.close()
 
-    issues = diff_schema(constraints, indexes, vector, fulltext)
+    issues = diff_schema(constraints, indexes, vector, fulltext, fulltext_kp)
+    issues += retrieval_config_issues(retrieval_config)
 
     print("Schema Verification")
     print("=" * 40)
@@ -212,8 +252,19 @@ def main():
         ft_ok = False
     print(f"  {_mark(ft_ok)}  {EXPECTED_FULLTEXT:35} (fulltext)")
 
+    if fulltext_kp:
+        missing = EXPECTED_FULLTEXT_KP_PROPS - fulltext_kp["properties"]
+        ft_kp_ok = not missing
+    else:
+        ft_kp_ok = False
+    print(f"  {_mark(ft_kp_ok)}  {EXPECTED_FULLTEXT_KP:35} (fulltext)")
+
+    rc_ok = retrieval_config != "missing"
+    print(f"  {_mark(rc_ok)}  {'retrieval_config':35} ({retrieval_config})")
+    print(f"  [INFO] {'vector_filter_props':35} ({vector_filter_props})")
+
     if args.strict:
-        expected_all = EXPECTED_INDEXES | {EXPECTED_VECTOR_INDEX, EXPECTED_FULLTEXT}
+        expected_all = EXPECTED_INDEXES | {EXPECTED_VECTOR_INDEX, EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_KP}
         extras = set(indexes) - expected_all - EXPECTED_CONSTRAINTS - EXPECTED_RUNTIME_CONSTRAINTS
         if extras:
             print(f"\n  [INFO] Extra indexes in DB (not required):")

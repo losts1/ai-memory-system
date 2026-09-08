@@ -16,27 +16,28 @@ Usage examples:
     python3 neo4j_learn_sync.py --assistant Weft
     python3 neo4j_learn_sync.py --assistant Weft --mind   # --mind is alias
 """
+from __future__ import annotations  # `X | None` annotations must not evaluate on Python 3.9
+
 import argparse
+import importlib.util
 import json
 import os
-import hashlib
-import pickle
 import re
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
 # Ensure ai_memory package is importable when run as a script
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from ai_memory.embed import embed_fact, embed_text
 from ai_memory.learn import (
     is_topic_saturated,
     parse_learned_topics,
     rebuild_graph,
     sync_facts,
 )
+from ai_memory.retrieval_config import load_retrieval_config
 
 _WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
 MEMORY_DIR = _WORKSPACE / 'memory'
@@ -56,11 +57,7 @@ except ImportError:
     except ImportError:
         pass
 
-try:
-    import ollama
-    NEO4J_VECTOR_AVAILABLE = True
-except ImportError:
-    pass
+NEO4J_VECTOR_AVAILABLE = importlib.util.find_spec("ollama") is not None
 
 
 def _load_sync_state(force_full: bool = False) -> dict:
@@ -116,32 +113,6 @@ def _build_fact_metadata(topic: dict) -> dict:
     }
 
 
-def _get_embedding_with_cache(text: str, model: str, cache_dir: Path):
-    text_hash = hashlib.md5(text[:2000].encode()).hexdigest()
-    cache_file = cache_dir / f'{model}_{text_hash}.pkl'
-    if cache_file.exists():
-        try:
-            with open(cache_file, 'rb') as f:
-                return pickle.load(f)
-        except Exception:
-            pass
-    for attempt in range(2):
-        try:
-            response = ollama.embeddings(model=model, prompt=text[:2000])
-            embedding = response["embedding"]
-            if embedding:
-                try:
-                    with open(cache_file, 'wb') as f:
-                        pickle.dump(embedding, f)
-                except Exception:
-                    pass
-            return embedding
-        except Exception:
-            if attempt == 0:
-                time.sleep(0.5)
-    return None
-
-
 def _update_indexes_and_optional_extraction(topics: list, driver, extract_params: bool) -> None:
     if EMBEDDING_INDEX_AVAILABLE:
         update_embedding_index(topics)
@@ -157,6 +128,12 @@ def _update_indexes_and_optional_extraction(topics: list, driver, extract_params
             print("Warning: neo4j_param_extract.py not found, skipping", file=sys.stderr)
         except Exception as e:
             print(f"Warning: param extraction failed: {e}", file=sys.stderr)
+
+
+def _sync_text_only(topics: list, assistant) -> int:
+    """Write topics to Neo4j as text only (embed_fn=None) — update_neo4j_vector below is the
+    script's single embedding pass, so sync_facts must not embed each topic a second time."""
+    return sync_facts(topics, assistant=assistant, embed_fn=None)
 
 
 def main():
@@ -176,8 +153,12 @@ def main():
     args = parser.parse_args()
 
     if args.rebuild_graph:
-        print("Rebuilding RELATED_TO graph with tighter params (max_df_ratio=0.1, min_shared=2)...")
-        edge_count = rebuild_graph()
+        print("Rebuilding RELATED_TO graph (nightly full edge rebuild: TF-IDF + embedding z-blend, top-k picks)...")
+        try:
+            edge_count = rebuild_graph()
+        except RuntimeError as e:
+            print(f"  Failed: {e}", file=sys.stderr)
+            sys.exit(1)
         print(f"  Done — {edge_count} RELATED_TO edges")
         return
 
@@ -225,7 +206,7 @@ def main():
         return
 
     print(f"Found {len(all_topics)} new topics to sync")
-    synced = sync_facts(all_topics, assistant=args.assistant)
+    synced = _sync_text_only(all_topics, args.assistant)
     print(f"\nSynced {synced}/{len(all_topics)} topics to Neo4j")
 
     # Optional embedding index updates (CLI-only, complex deps)
@@ -264,47 +245,26 @@ def update_embedding_index(topics: list) -> int:
         return 0
 
 
-def update_neo4j_vector(topics: list, driver) -> int:
-    if not NEO4J_VECTOR_AVAILABLE:
-        return 0
+def update_neo4j_vector(topics: list, driver, *, embed_fn=embed_text) -> int:
+    """Embed each synced topic's Fact from its canonical text (spec §4) with provenance, CAS-guarded."""
     try:
-        cache_dir = _WORKSPACE / 'memory' / 'embeddings'
-        model = os.environ.get('EMBEDDING_MODEL', 'nomic-embed-text')
-        texts, names = [], []
-        for topic in topics:
-            text = _prepare_embedding_text(topic.get('key_points', []))
-            if text:
-                texts.append(text)
-                names.append(topic.get('name', ''))
-        if not texts:
-            return 0
-        embeddings = [None] * len(texts)
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {
-                executor.submit(_get_embedding_with_cache, text, model, cache_dir): i
-                for i, text in enumerate(texts)
-            }
-            for future in as_completed(futures):
-                i = futures[future]
-                embeddings[i] = future.result()
-        updated = 0
         with driver.session() as session:
-            for name, embedding in zip(names, embeddings):
-                if not embedding:
+            cfg = load_retrieval_config(session)
+            if cfg is None:
+                print("  RetrievalConfig missing; skipping embeddings (run ai-memory embed --all)", file=sys.stderr)
+                return 0
+            counts = {"embedded": 0, "cas_skipped": 0, "embed_failed": 0, "missing": 0}
+            for topic in topics:
+                name = topic.get("name")
+                if not name:
                     continue
-                try:
-                    session.run(
-                        'MATCH (f:Fact {name: $name}) SET f.embedding = $embedding',
-                        name=name, embedding=embedding
-                    )
-                    updated += 1
-                except Exception as e:
-                    print(f"  Error updating embedding for {name}: {e}")
-        if updated > 0:
-            print(f"  Updated {updated} facts in Neo4j vector index")
-        return updated
-    except Exception as e:
-        print(f"Warning: Could not update Neo4j vector index: {e}", file=sys.stderr)
+                counts[embed_fact(session, name, cfg, embed_fn)] += 1
+        if counts["embedded"]:
+            print(f"  Embedded {counts['embedded']} facts (canonical text, config v{cfg.version}); "
+                  f"cas_skipped={counts['cas_skipped']} failed={counts['embed_failed']}")
+        return counts["embedded"]
+    except Exception as e:  # noqa: BLE001
+        print(f"Warning: Could not update Neo4j vectors: {e}", file=sys.stderr)
         return 0
 
 

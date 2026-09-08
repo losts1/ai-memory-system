@@ -7,7 +7,55 @@ Versioning follows [SemVer](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [1.4.0] - 2026-09-08
+
+The retrieval redesign is a breaking change (`search()` defaults to hybrid, `graph=True`
+no longer returns `related_facts`, hit keys `content`/`summary` became `teaser`), so
+`pyproject.toml` is bumped to 1.4.0. Upgrading an existing install is not a `pip install`
+away — read [UPGRADING.md](./UPGRADING.md) before you start.
+
+### Fixed (pre-release review)
+- `ai-memory nightly` no longer cuts the edge layer over when the re-embed reports
+  `embed_failed > 0`: it exits 1 and the previous `rule_version` stays live, as the
+  systemd README promised. `--json` omits the multi-megabyte `edge_list` unless
+  `--dump-edges` is passed (#1).
+- `ai-memory eval`: an empty candidate pool is unjudged (fails closed) instead of
+  "judged with nDCG 0"; `exact5` shares the `judged_queries` denominator with the
+  judged metrics; new `--gate-against before.json [--gate-ranker R]` applies the ship
+  gate and exits 1 on FAIL; `eval-edges` is a real subparser listed by `--help` (#3).
+- Library write paths no longer clobber another mind's Fact: `learn._sync_fact_tx` and
+  `neo4j_sync.write_fact_with_embedding` read the existing node's `assistant` before the
+  MERGE-by-name and refuse when it differs from the writer's (including an untagged
+  writer) — nothing is set, no edges are maintained, and the caller is told
+  (`owner_conflict` status, run-summary count, one stderr line). An untagged Fact stays
+  claimable, the one deliberate relaxation vs the grok client. `MemoryClient.write()`
+  gains `assistant=`. `choose_keeper`/`_break_tie` now treat a NULL `status` as live, like
+  `is_handled`, the command emission and `retrieval._is_active` ("only live member") (#2).
+- `neo4j_sync.py` / `neo4j_learn_sync.py`: `from __future__ import annotations` so
+  `X | None` annotations import on Python 3.9 again; a guard test scans every module (#4).
+- `vector_index.migrate()` returns `already_migrated` instead of dropping a live index
+  that already carries the filter properties (#5).
+- Retrieval contract gaps (#7): the grok client's `_escape_lucene` lowercases
+  AND/OR/NOT like the library's; `same_topic` compares names case-insensitively in
+  both implementations; `load_supersedes` / `load_supersedes_strict` return a multimap
+  (`{new: {old, ...}}`) so a keeper with several losers no longer hides edges from
+  `is_handled`, `plan_supersedes` (already-superseded and cycle checks) and
+  `wordindex.is_duplicate`; `search_vector` latches the over-fetch fallback only after
+  the `queryNodes` retry succeeds, never on index-not-found, only on the 22ND3 /
+  SEARCH-unsupported errors, and under a lock; `MemoryClient.search(graph=True,
+  mode=...)` raises on a conflicting mode; the grok `--mode` paths fuse over the pool
+  width and lexical hits carry the neutral `lex` tag.
+- `verify_schema.py --strict` exits 1 when the `RetrievalConfig` node is missing (#8).
+- `full` extra now includes numpy, so `pip install 'ai-memory-system[full]'` can run
+  `nightly` / `edges --rebuild` (#8).
+- Judge endpoint defaults honour `AI_MEMORY_JUDGE_URL` / `AI_MEMORY_JUDGE_MODEL` (#8).
+- Example systemd unit defaults `AI_MEMORY_DIR` to `~/.ai-memory`; its README no longer
+  calls a real cutover a "dry run" and names no personal path (#1, #8).
+- Grok skill redeploys copy the whole directory (`SKILL.md` changed in phases 4–5); the
+  grok README verify step diffs the deployed copy. Root cause of #9: the README
+  used to say copy only the two `.py` files (“no other files need to move”), so
+  live `SKILL.md` lagged the script; a later script-only commit went undeployed
+  for the same reason (`diff -rq` was not re-run) (#9).
 
 ### Added
 - **`grok/`** — Grok Build TUI integration: copy-in skill, SessionStart /
@@ -39,7 +87,207 @@ Versioning follows [SemVer](https://semver.org/).
   `calibration_agreement(..., boundary=1)` for the related-vs-unrelated
   boundary an edge encodes. 47 offline tests.
 
+- **`ai_memory.retrieval`** (pure fusion/ranking/Cypher builders), `search_hybrid`,
+  `ai_memory.eval.harness` + `ai-memory eval`.
+
+- **`tests/test_retrieval_contract.py`** — cross-implementation contract between
+  `ai_memory` and the grok client: asserts identical prepared text on shared
+  fixtures, identical SEARCH clause modulo parameter names, identical
+  fused-and-ranked order, the eight shared hit keys, identical CAS subquery.
+
+- **`ai_memory.embed`** — canonical embedding text (`fact_embed_text`: name, summary,
+  key points as dash lines, content; 2,000-char cap; corpus boilerplate 4-gram runs
+  removed), versioned text sha, provenance-carrying compare-and-set embed writes
+  (`embedding_model`, `embedding_dim`, `embedding_text_sha`, `boilerplate_version` set
+  in the same statement as `embedding`), `embed_all` backfill with `embedding_prev`
+  safety net, `vector_stats`. **`ai_memory.retrieval_config`** — the
+  `(:RetrievalConfig {id: "current"})` singleton (boilerplate grams + version) that
+  every writer reads before embedding. CLI: `ai-memory embed --all|--stale-only|
+  --drop-prev|--rollback [--keep-prev] [--no-publish]`, `ai-memory stats`.
+
+- **`ai_memory.vector_index`** — DDL/probe builders, `wait_online`, `membership_check`,
+  `property_probes`, and a gated `preflight`/`migrate` for the vector index's filter
+  properties (spec §4 "Index rebuild"): `preflight` creates a temporary `<index>_v2`,
+  measures population, probes membership and per-property filtering, then always drops
+  it — unless the live index already carries every requested filter property, in which
+  case it reports `already_migrated: true` without creating anything; `migrate` probes
+  `CYPHER 25` support and aborts before any change if rejected, then drops and recreates
+  the live index, waits for `ONLINE`/100% population, then gates on the same checks —
+  on gate failure it leaves the new index in place for the operator to inspect, and if
+  the CREATE fails after a successful DROP it attempts to recreate a plain (unfiltered)
+  index and raises with the exact statement to re-run. `build_create_index_ddl_plain`
+  builds the unfiltered Cypher-5 DDL for servers that reject `CYPHER 25`.
+  `scripts/neo4j_migrate_vector_filters.py` wraps both as a CLI (`--preflight`,
+  `--migrate`, `--dry-run`, `--index`, `--props`, `--json`); `--dry-run` applies to
+  `--migrate` only (rejected with `--preflight`, exit 2) and prints the statements and
+  runs nothing; an empty `--props` is rejected (exit 2); any exception from
+  `--preflight`/`--migrate` is reported as `{"ok": false, "mode", "index", "error"}`
+  with exit 1 instead of a traceback. `ai_memory.eval.harness` gained `--subset
+  all|scoped|unscoped` to grade only golden queries with/without filters, now also
+  shown in the printed table. `validate_schema()`
+  now reports `vector_filter_props` (`"ok"` / `"missing: [...]"` / `"index not found"`) for
+  the configured vector index.
+
+- **`ai_memory.wordindex`** (spec §7) — the RELATED_TO edge layer: `tokenize` (≤24
+  tokens per Fact from the canonical embedding text, name tokens first), TF-IDF
+  cosine over published `Word.idf` blended with embedding cosine and z-scored
+  against random-pair baselines for the corpus, `maintain_edges_for` (on-write
+  maintenance, no numpy required) and `rebuild_edges` (nightly full rebuild, needs
+  `numpy`), and `edge_stats` (edge count, current/stale `rule_version` counts,
+  isolated-Fact percentage, max/p95 degree). CLI: `ai-memory edges
+  (--rebuild|--dry-run) [--seed] [--pairs] [--k] [--json]`, `ai-memory nightly
+  [--seed] [--json]` (runs publish-boilerplate + re-embed, then rebuild edges and
+  cut over, in that order), `ai-memory eval-edges` (judges a seeded RELATED_TO
+  sample against the edge rubric; `--legacy`/`--rule-version` picks the sampled
+  population, `--gate-against` compares against a previous run's `--json` output).
+  `ai-memory stats` now also reports the edge-health fields from `edge_stats`.
+  New `edges` extra (`numpy>=1.24`) — `pip install 'ai-memory-system[edges]'` —
+  required only for the nightly rebuild; the on-write path has no numpy dependency.
+
+- **`ai_memory.duplicates`** (phase 6) — a read-only owner report for duplicate
+  Facts: same-topic re-learnings detected by a trailing time/date suffix on the
+  name or by near-copy embedding cosine (≥0.95, found with one vector-index
+  `SEARCH` query per embedded Fact, exact cosine recomputed server-side),
+  merged into groups by union-find. A group is already `handled` when it has
+  at most one live member or is already fully connected by `SUPERSEDES`
+  edges; otherwise `choose_keeper` suggests one by newest dated name suffix
+  (a clock-only suffix does not count), else newest `updated_at`, else
+  newest `created_at`, else the only active
+  member, else the lexicographically last name, and the report prints
+  ready-to-paste `ai-memory supersede <keeper> <other> --apply` commands
+  (each name passed through `shlex.quote`). A group spanning more than one
+  `assistant` or `space` is marked `needs_owner_decision` with no suggested
+  keeper. Nothing is ever merged or superseded by the report itself. CLI:
+  `ai-memory duplicates [--cos 0.95] [--k 3] [--include-handled]
+  [--index NAME] [--json PATH] [--markdown PATH]`.
+- **`ai-memory supersede`** — guarded, plan-then-apply CLI for marking one
+  Fact superseded by another: `ai-memory supersede NEW OLD [--apply]
+  [--by NAME]`, or `--from-file decisions.json` (a JSON list of
+  `{"new", "old", "apply": true|false}`, where `apply` must be a JSON
+  boolean). Every pair is planned first and refused when `new`/`old` doesn't
+  exist, `new == old`, `old` is already superseded by a different Fact, or
+  the pair would create a `SUPERSEDES` cycle; without `--apply` it only
+  prints the plan and exits 1 if any row is refused, so it doubles as a
+  dry-run validator. With `--apply` it writes only the rows that are both ok
+  and `apply: true`: `status='superseded'`, `superseded_at`, and
+  `updated_at` on the old Fact; `status` on the new Fact only if it was
+  unset; and a `SUPERSEDES` edge carrying `at`/`by` — the same write the
+  grok client's shared-write supersede path uses, minus that path's
+  `old.space = 'shared' AND old.status = 'active'` precondition (library
+  Facts have null `status`/`space`; the guard is instead unknown-name,
+  self-pair, already-superseded, and cycle checks).
+
+### Changed
+- **The grok client (`grok/skills/neo4j-memory/scripts/neo4j_memory.py`) is ported
+  onto the retrieval contract.** It embeds `fact_embed_text` (canonical text, corpus
+  boilerplate stripped per the live `RetrievalConfig` read over Bolt) instead of its
+  own text; its vector leg is now the Cypher 25 `SEARCH ... WHERE ... LIMIT $k`
+  clause with in-index equality filters (new `search --assistant/--space/--trust`,
+  never `status`) instead of an over-fetch-and-post-filter query, so it requires the
+  phase-3 migrated index and has no fallback if the index is un-migrated (the vector
+  leg errors and search degrades to fulltext-only, same as Ollama down); its ranking
+  pipeline is RRF over the whole fulltext+vector pool (scores now round to 6 decimals,
+  matching the library's `fuse_rrf`), then the supersede/same-topic sink, then the
+  active exact-name boost (same order as the library); and `write`,
+  shared `write`, and `embed` write vector provenance (`embedding_model`,
+  `embedding_dim`, `embedding_text_sha`, `boilerplate_version`) alongside `embedding`
+  in one compare-and-set statement, so Grok-written Facts are indistinguishable from
+  library-written ones. `embed` now also re-embeds foreign vectors (no
+  `embedding_text_sha`), not just missing ones.
+- **`MemoryClient.search(query)`'s default (`graph=False`) now runs the hybrid
+  path** — the vector leg plus the two fulltext legs, fused by RRF — instead
+  of a single vector query. Pass `mode="vector"` for the old vector-only
+  behaviour; it now also applies the supersede sink and the 0.80 vector-only
+  floor, which previously only ran under `mode="hybrid"`.
+- **`MemoryClient.search(graph=True)` semantics changed.** `graph=True` is now
+  a no-op alias for `mode="hybrid"`; it no longer appends `related_facts` /
+  `relationships` to each hit. To get related Facts, call `client.traverse(name, depth=1)`.
+- **`search_graph()` result shape changed.** No longer returns `related_facts`,
+  `relationships`, or `related_count`; returns the same hit dict as `search_vector()`.
+- **`search_vector()` hit dict keys changed.** Removed: `content`, `summary`.
+  Added: `teaser`, `key_points`, `assistant`, `status`, `space`, `via` (and
+  `source`; vector-origin hits also carry `vec_score`). `--fields summary` /
+  `--fields content` no longer select anything — use `--fields teaser`.
+  `--metadata-only` now reads `teaser` instead of `summary`/`content`.
+- **New keyword arguments `space=` and `mode=`.** `space=` is available on
+  `MemoryClient.search`, `search_vector`, and `search_graph` to filter to a
+  shared space. `mode=` ("hybrid" | "fulltext" | "vector") is available on
+  `MemoryClient.search` and the new `search_hybrid()`.
+- **All in-repo writers embed the same text.** `MemoryClient.write()`/`learn()`,
+  `neo4j_sync.py` and `neo4j_learn_sync.py` previously embedded several different texts
+  (name+content, key points only, …) or none; they now embed `fact_embed_text(...)` and
+  write text and vector in one statement, guarded by a compare-and-set on the text
+  fields they do not own. A writer that cannot read `RetrievalConfig` or reach Ollama
+  writes the text only; `ai-memory embed --all` fills the vector later.
+- `scripts/neo4j_seed.py` creates `RetrievalConfig` version 1 (no boilerplate) on fresh
+  installs; `validate_schema()` reports `retrieval_config`.
+- `scripts/neo4j_seed.py` now creates the vector index with filter properties
+  `assistant, space, status, provenance_trust` (`ai_memory.vector_index.DEFAULT_FILTER_PROPS`)
+  on fresh installs against a Cypher-25-capable server, so the in-index `SEARCH … WHERE`
+  path works without a later migration; on a Cypher-5-only server it falls back to the
+  plain (unfiltered) `CREATE VECTOR INDEX` DDL — a fresh install there still gets a
+  working vector index, just without in-index filtering until `--migrate` runs later.
+
+- **RELATED_TO edges are now chosen per Fact instead of by shared-word count.**
+  Each Fact picks its top 5 neighbours by a blend of TF-IDF cosine (binary TF-IDF
+  over the tokenized canonical text) and embedding cosine, each z-scored against
+  random-pair baselines for the corpus, kept only above a floor set at the blend's
+  99th percentile over random pairs; duplicates (trailing-suffix twins, `SUPERSEDES`
+  chains, cosine ≥ 0.95) never consume a pick. An edge exists while either endpoint
+  still picks it, and now carries `weight`, `tfidf`, `cos`, `shared_keywords`,
+  `picked_by`, `via`, `rule_version` in place of the old unweighted edge. Edges are
+  maintained on every write (`maintain_edges_for`: the written Fact's own picks,
+  plus any neighbour whose worst pick it beats) and rebuilt in full by `ai-memory
+  nightly`, which publishes a new `rule_version` and deletes every edge with a
+  different or missing one — the first nightly run after upgrading deletes every
+  legacy shared-word edge, so export them first if you need them (`MATCH
+  (a)-[r:RELATED_TO]->(b) RETURN a.name, b.name, properties(r)`). `traverse` and
+  `trace_parameter` callers now see sparser, weighted edges; `related_count`'s
+  *definition* is unchanged, but its values are not — sparser, name-ordered edges
+  change which Facts report `related_count == 0`.
+- **The Word index is now built from the canonical embedding text**
+  (`fact_embed_text`, ≤24 tokens per Fact) instead of from name words — `learn`
+  and the grok client's `write`/`write_shared` route through the new tokenizer
+  (`wordindex.tokenize`, via `write_fact_tokens` / `_write_tokens`).
+  `scripts/neo4j_sync.py` was not wired to this at first (writing `f.content`
+  and the embedding only, with no tokenizer and no edge-maintenance call); a
+  follow-on task wired it in — see below.
+- **`learn.link_related_facts` and `learn._post_sync_tx` are removed.** The
+  shared-word RELATED_TO edges they wrote are superseded by
+  `wordindex.maintain_edges_for`, which `MemoryClient.write()`/`learn()`,
+  the grok client, and `scripts/neo4j_sync.py` all call after each write.
+- `scripts/neo4j_sync.py` now writes Word tokens from the canonical text and
+  runs on-write edge maintenance like the other writers.
+- **The grok client's `organize` no longer MERGEs edges between Facts sharing ≥2
+  words.** It now runs the same on-write rule (`maintain_edges_for`, a verbatim
+  port) over one mind's Facts, and requires a published edge rule first
+  (`ai-memory nightly`) — it refuses if `RetrievalConfig.rule_version` is unset.
+  Redeploy the grok client after upgrading (see MIGRATION.md).
+
 ### Fixed
+- **The SEARCH statement inlined the vector index name.** Neo4j rejects a parameter
+  inside the `VECTOR INDEX` clause (`Parameter cannot be used in a VECTOR INDEX clause`),
+  so `build_search_cypher`'s `VECTOR INDEX $index` could never succeed — every call fell
+  back to `db.index.vector.queryNodes` via the syntax-error latch, and the phase-1
+  in-index path never ran. Found by the phase-3 pre-flight. Fixed: `build_search_cypher`
+  now takes the index name as an argument, validates it (`validate_index_name`,
+  `^[A-Za-z_][A-Za-z0-9_]*$`), and inlines it as a backtick-quoted identifier; `$vec`,
+  `$pool`, and filter values stay parameters.
+- **`build_create_index_ddl`'s `WITH [...]` filter-property list needs `CYPHER 25`.**
+  Under the Cypher 5 default, Neo4j 2026.04 rejected it (`Invalid input 'WITH': expected
+  'OPTIONS'`). The statement is now prefixed with a literal `CYPHER 25` line, matching
+  `build_probe_cypher`; `build_drop_ddl` is unchanged (plain `DROP INDEX` is Cypher 5).
+  On a server that does not support the `CYPHER 25` prefix, `--migrate` probes that
+  support before the DROP and aborts before touching the live index if rejected;
+  `scripts/neo4j_seed.py` falls back to the plain (unfiltered) DDL there, so
+  `search_vector`'s existing over-fetch fallback has a live index to query.
+- **`neo4j_migrate_vector_filters.py --index` resolved too early.** Its default read
+  `os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")` at argparse time, before
+  `_open_driver()`'s `get_driver()` loads `<workspace>/.env.neo4j` — so an unset shell
+  environment silently targeted `fact_embeddings` instead of the workspace's configured
+  index. `--index` now defaults to `None` and is resolved (`a.index or
+  os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")`) after the driver opens; an
+  explicit `--index` still takes precedence.
 - **`_config.py` never muted server notifications.** `_driver_kwargs` gated
   `notifications_min_severity` on `inspect.signature(GraphDatabase.driver)`,
   whose signature is `(uri, *, auth, **config)`, so the key was never found
@@ -47,6 +295,12 @@ Versioning follows [SemVer](https://semver.org/).
   always passed (default `OFF`; a `WARNING` floor would not have muted those
   pings, which are severity WARNING) and `get_driver` retries without it on
   drivers older than 5.6. Two tests cover both paths.
+- **`search_vector` scoped searches no longer lose results to the top-k cliff;
+  query timeouts are applied via `neo4j.Query`.**
+- **`_sync_fact_tx` no longer swallows `TransientError`.**
+- **The test suite was writing to whatever Neo4j `bolt://localhost:7687` reached.**
+  `tests/conftest.py` now forces `NEO4J_URI` to `bolt://127.0.0.1:1` (unreachable) for
+  every test, so a `Test Fact` node can no longer land in a live graph.
 
 ## [1.3.3] - 2026-06-05
 

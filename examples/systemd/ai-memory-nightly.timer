@@ -1,0 +1,14 @@
+# Runs ai-memory-nightly.service once a day. Persistent=true catches up a missed run
+# (machine asleep) at the next boot; the randomized delay avoids colliding with other
+# 03:30 jobs.
+[Unit]
+Description=Daily ai-memory nightly re-embed and edge rebuild
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=10min
+Unit=ai-memory-nightly.service
+
+[Install]
+WantedBy=timers.target

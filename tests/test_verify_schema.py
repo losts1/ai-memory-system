@@ -7,6 +7,8 @@ get_live_schema() (which needs a live DB) is not called here.
 import sys
 from pathlib import Path
 
+import pytest
+
 # Make scripts/ importable without installing as a package
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
@@ -76,6 +78,7 @@ def test_diff_schema_detects_missing_indexes():
         live_indexes={},   # all missing
         live_vector=None,
         live_fulltext=None,
+        live_fulltext_kp=None,
     )
     issue_text = " ".join(issues)
     assert "fact_created_at_idx" in issue_text
@@ -88,6 +91,7 @@ def test_diff_schema_passes_when_all_present():
         diff_schema, EXPECTED_CONSTRAINTS, EXPECTED_INDEXES,
         EXPECTED_VECTOR_INDEX, EXPECTED_VECTOR_DIMS,
         EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_PROPS,
+        EXPECTED_FULLTEXT_KP, EXPECTED_FULLTEXT_KP_PROPS,
     )
     live_indexes = {
         name: {"type": "RANGE", "properties": set()}
@@ -98,6 +102,7 @@ def test_diff_schema_passes_when_all_present():
         live_indexes=live_indexes,
         live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": EXPECTED_VECTOR_DIMS},
         live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
+        live_fulltext_kp={"name": EXPECTED_FULLTEXT_KP, "properties": EXPECTED_FULLTEXT_KP_PROPS},
     )
     assert issues == [], f"Unexpected issues: {issues}"
 
@@ -109,6 +114,7 @@ def test_diff_schema_ignores_extra_production_indexes():
         diff_schema, EXPECTED_CONSTRAINTS, EXPECTED_INDEXES,
         EXPECTED_VECTOR_INDEX, EXPECTED_VECTOR_DIMS,
         EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_PROPS,
+        EXPECTED_FULLTEXT_KP, EXPECTED_FULLTEXT_KP_PROPS,
     )
     live_indexes = {
         name: {"type": "RANGE", "properties": set()}
@@ -124,6 +130,7 @@ def test_diff_schema_ignores_extra_production_indexes():
         live_indexes=live_indexes,
         live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": EXPECTED_VECTOR_DIMS},
         live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
+        live_fulltext_kp={"name": EXPECTED_FULLTEXT_KP, "properties": EXPECTED_FULLTEXT_KP_PROPS},
     )
     assert issues == [], f"Extra production indexes caused failures: {issues}"
 
@@ -134,6 +141,7 @@ def test_diff_schema_detects_wrong_vector_dims():
         diff_schema, EXPECTED_CONSTRAINTS, EXPECTED_INDEXES,
         EXPECTED_VECTOR_INDEX, EXPECTED_VECTOR_DIMS,
         EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_PROPS,
+        EXPECTED_FULLTEXT_KP, EXPECTED_FULLTEXT_KP_PROPS,
     )
     live_indexes = {
         name: {"type": "RANGE", "properties": set()}
@@ -144,6 +152,7 @@ def test_diff_schema_detects_wrong_vector_dims():
         live_indexes=live_indexes,
         live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": 1536},  # wrong
         live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
+        live_fulltext_kp={"name": EXPECTED_FULLTEXT_KP, "properties": EXPECTED_FULLTEXT_KP_PROPS},
     )
     expected_msg = (
         f"Vector index {EXPECTED_VECTOR_INDEX!r} has wrong dimensions: "
@@ -159,6 +168,7 @@ def test_diff_schema_detects_missing_summary_in_fulltext():
     from verify_schema import (
         diff_schema, EXPECTED_CONSTRAINTS, EXPECTED_INDEXES,
         EXPECTED_VECTOR_INDEX, EXPECTED_VECTOR_DIMS, EXPECTED_FULLTEXT,
+        EXPECTED_FULLTEXT_KP, EXPECTED_FULLTEXT_KP_PROPS,
     )
     live_indexes = {
         name: {"type": "RANGE", "properties": set()}
@@ -172,6 +182,7 @@ def test_diff_schema_detects_missing_summary_in_fulltext():
             "name": EXPECTED_FULLTEXT,
             "properties": {"name", "content"},  # old definition, missing summary
         },
+        live_fulltext_kp={"name": EXPECTED_FULLTEXT_KP, "properties": EXPECTED_FULLTEXT_KP_PROPS},
     )
     assert any("summary" in i for i in issues), (
         f"Expected a 'missing summary' issue, got: {issues}"
@@ -183,6 +194,7 @@ def test_diff_schema_detects_vector_dims_none():
     from verify_schema import (
         diff_schema, EXPECTED_CONSTRAINTS, EXPECTED_INDEXES,
         EXPECTED_VECTOR_INDEX, EXPECTED_FULLTEXT, EXPECTED_FULLTEXT_PROPS,
+        EXPECTED_FULLTEXT_KP, EXPECTED_FULLTEXT_KP_PROPS,
     )
     live_indexes = {
         name: {"type": "RANGE", "properties": set()}
@@ -193,8 +205,97 @@ def test_diff_schema_detects_vector_dims_none():
         live_indexes=live_indexes,
         live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": None},
         live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
+        live_fulltext_kp={"name": EXPECTED_FULLTEXT_KP, "properties": EXPECTED_FULLTEXT_KP_PROPS},
     )
     expected_msg = f"Vector index {EXPECTED_VECTOR_INDEX!r} has no dimensions configured"
     assert issues == [expected_msg], (
         f"Expected exactly [{expected_msg!r}], got: {issues}"
     )
+
+
+def test_expected_key_points_fulltext_index_declared():
+    import scripts.verify_schema as vs
+    assert vs.EXPECTED_FULLTEXT_KP == "fact_key_points"
+    assert vs.EXPECTED_FULLTEXT_KP_PROPS == {"key_points"}
+
+
+def test_diff_schema_requires_live_fulltext_kp():
+    """M11: live_fulltext_kp must be required, not silently defaulted to
+    None — a caller that forgets it would otherwise get a false-negative
+    'fact_key_points missing' report only when it's actually absent, never
+    a loud error when the caller itself forgot to pass it."""
+    from verify_schema import (
+        EXPECTED_CONSTRAINTS,
+        EXPECTED_FULLTEXT,
+        EXPECTED_FULLTEXT_PROPS,
+        EXPECTED_INDEXES,
+        EXPECTED_VECTOR_DIMS,
+        EXPECTED_VECTOR_INDEX,
+        diff_schema,
+    )
+    live_indexes = {name: {"type": "RANGE", "properties": set()} for name in EXPECTED_INDEXES}
+    with pytest.raises(TypeError):
+        diff_schema(
+            live_constraints=EXPECTED_CONSTRAINTS,
+            live_indexes=live_indexes,
+            live_vector={"name": EXPECTED_VECTOR_INDEX, "dims": EXPECTED_VECTOR_DIMS},
+            live_fulltext={"name": EXPECTED_FULLTEXT, "properties": EXPECTED_FULLTEXT_PROPS},
+        )
+
+
+# ---------------------------------------------------------------------------
+# _config.validate_schema — retrieval_config reporting
+# ---------------------------------------------------------------------------
+
+def test_validate_schema_reports_retrieval_config(monkeypatch):
+    from ai_memory import _config
+    class R(dict):
+        def __getitem__(self, k): return dict.__getitem__(self, k)
+    class Sess:
+        def __init__(self, cfg_rows): self.cfg_rows = cfg_rows
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def run(self, q, **kw):
+            if "RetrievalConfig" in q:
+                return iter(self.cfg_rows)
+            return iter([])
+    class Drv:
+        def __init__(self, rows): self.rows = rows
+        def session(self): return Sess(self.rows)
+    out = _config.validate_schema(Drv([R(version=2)]))
+    assert out["retrieval_config"] == "version 2"
+    out = _config.validate_schema(Drv([]))
+    assert out["retrieval_config"] == "missing"
+
+
+# ---------------------------------------------------------------------------
+# _config.validate_schema — vector_filter_props reporting
+# ---------------------------------------------------------------------------
+
+def test_validate_schema_reports_vector_filter_props():
+    from ai_memory import _config
+    class Sess:
+        def __init__(self, props): self.props = props
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def run(self, q, **kw):
+            if "type = 'VECTOR' AND name = $name" in q:
+                return iter([{"properties": self.props}]) if self.props is not None else iter([])
+            if "RetrievalConfig" in q:
+                return iter([])
+            return iter([])
+    class Drv:
+        def __init__(self, props): self.props = props
+        def session(self): return Sess(self.props)
+    assert _config.validate_schema(Drv(["embedding", "assistant", "space", "status", "provenance_trust"]), vector_index="idx")["vector_filter_props"] == "ok"
+    assert _config.validate_schema(Drv(["embedding"]), vector_index="idx")["vector_filter_props"] == "missing: ['assistant', 'provenance_trust', 'space', 'status']"
+    assert _config.validate_schema(Drv(None), vector_index="idx")["vector_filter_props"] == "index not found"
+
+
+def test_retrieval_config_missing_is_an_issue():
+    """review #8: a missing RetrievalConfig printed a cross but never failed the exit code."""
+    import verify_schema as vs
+
+    assert vs.retrieval_config_issues("version 3") == []
+    issues = vs.retrieval_config_issues("missing")
+    assert len(issues) == 1 and "RetrievalConfig" in issues[0] and "neo4j_seed.py" in issues[0]

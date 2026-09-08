@@ -25,6 +25,8 @@ See README.md for full documentation.
 """
 
 from ai_memory._config import get_driver, get_workspace, validate_schema
+from ai_memory.duplicates import duplicate_report, supersede_fact
+from ai_memory.embed import embed_all as _embed_all, fact_embed_text, vector_stats as _vector_stats
 from ai_memory.exceptions import (
     AIMemoryError,
     Neo4jConnectionError,
@@ -43,6 +45,11 @@ from ai_memory.learn import (
     write_fact as _write_fact,
 )
 from ai_memory.provenance import Provenance
+from ai_memory.wordindex import (
+    edge_stats as _edge_stats,
+    maintain_edges_for as _maintain_edges_for,
+    rebuild_edges as _rebuild_edges,
+)
 
 from pathlib import Path
 from typing import List, Optional
@@ -54,6 +61,11 @@ trace_parameter = _trace_parameter
 graph_stats = _graph_stats
 sync_facts = _sync_facts
 rebuild_graph = _rebuild_graph
+embed_all = _embed_all
+vector_stats = _vector_stats
+maintain_edges_for = _maintain_edges_for
+rebuild_edges = _rebuild_edges
+edge_stats = _edge_stats
 
 
 class MemoryClient:
@@ -118,67 +130,36 @@ class MemoryClient:
         metadata_only: bool = False,
         fields: Optional[List[str]] = None,
         trust_filter: Optional[str] = None,
+        space: Optional[str] = None,
+        mode: str = "hybrid",
     ) -> List[dict]:
-        """
-        Hybrid search across Neo4j vector index and optionally the graph.
+        """Hybrid search (spec §3). ``graph=True`` now means "lexical leg on",
+        which the default hybrid mode already is; it no longer appends
+        ``related_facts`` (see MIGRATION.md). ``use_embeddings`` keeps the FAISS
+        path and is incompatible with ``trust_filter``/``space``.
 
-        Args:
-            query:          Search string.
-            assistant:      Filter results to this assistant/mind (Phase 2).
-            max_results:    Max results per backend.
-            graph:          Also run fulltext + relationship graph search.
-            use_embeddings: Use local FAISS instead of Neo4j vector search.
-            metadata_only:  Return lightweight metadata only (name, teaser, counts).
-            fields:         Return only these fields from each result.
-            trust_filter:   Filter results to Facts with this provenance_trust value
-                            (e.g. "trusted", "suspicious"). None = no filter.
-                            Ignored when use_embeddings=True (FAISS has no provenance metadata).
-
-        Returns:
-            List of result dicts. Empty list if Ollama unavailable or query empty.
-
-        Raises:
-            ValueError               — if trust_filter is set with use_embeddings=True.
-            Neo4jConnectionError / Neo4jIndexNotFoundError / Neo4jQueryError —
-            see ai_memory.exceptions.
-        """
-        if use_embeddings and trust_filter is not None:
-            raise ValueError(
-                "trust_filter is incompatible with use_embeddings=True: "
-                "FAISS results have no provenance metadata. "
-                "Use the default Neo4j vector search (use_embeddings=False) instead."
-            )
+        ``graph=True`` only restates the default hybrid mode, so combining it with
+        an explicit ``mode`` other than ``"hybrid"`` is contradictory and raises
+        ValueError rather than silently running hybrid."""
+        if use_embeddings and (trust_filter is not None or space is not None):
+            raise ValueError("trust_filter/space are incompatible with use_embeddings=True: FAISS has no Fact metadata.")
         if trust_filter is not None and trust_filter == "":
             raise ValueError("trust_filter cannot be an empty string; pass None to disable filtering.")
-        ws = self._workspace
+        if graph and mode != "hybrid":
+            raise ValueError(f"graph=True means the lexical leg is on, i.e. mode='hybrid'; it cannot be combined with mode={mode!r}.")
         if use_embeddings:
-            results = search_faiss(query, workspace=ws, max_results=max_results)
+            results = search_faiss(query, workspace=self._workspace, max_results=max_results)
         else:
-            results = search_vector(
-                query, workspace=ws, max_results=max_results,
-                assistant=assistant, driver=self.driver(),
-                trust_filter=trust_filter,
+            from ai_memory import search as _search   # late import keeps monkeypatching simple
+            effective_mode = "hybrid" if graph else mode
+            results = _search.search_hybrid(
+                query, workspace=self._workspace, k=max_results, assistant=assistant,
+                space=space, trust=trust_filter, mode=effective_mode, driver=self.driver(),
             )
-
-        if graph:
-            graph_results = search_graph(
-                query, workspace=ws, max_results=max_results,
-                assistant=assistant, driver=self.driver(),
-                trust_filter=trust_filter,
-            )
-            # Dedupe by name: vector/FAISS results win, graph fills the rest.
-            seen = {r.get("name") for r in results if r.get("name")}
-            for r in graph_results:
-                name = r.get("name")
-                if name and name not in seen:
-                    results.append(r)
-                    seen.add(name)
-
         if metadata_only:
             results = [apply_metadata_only(r) for r in results]
         if fields:
             results = [apply_fields_filter(r, fields) for r in results]
-
         return results
 
     # ------------------------------------------------------------------
@@ -288,11 +269,9 @@ class MemoryClient:
         Scans {workspace}/memory/*.md for daily notes in the time window.
         Returns the count of successfully synced Fact nodes.
 
-        Facts created by this method are findable via ``search_graph()``
-        (fulltext index on name/summary) but NOT via ``search_vector()``
-        (vector index) — embeddings are not generated here. To make facts
-        semantically searchable, run ``neo4j_sync.py --full`` which writes
-        embeddings via Ollama.
+        Facts are embedded with the canonical text (spec §4) when local Ollama
+        and the ``RetrievalConfig`` node are available; otherwise the text is
+        written and ``ai-memory embed --all`` supplies the vector later.
 
         Note: does not apply saturation filtering. For production sync with
         deduplication, use the ``ai-memory learn-sync`` CLI command.
@@ -334,6 +313,7 @@ class MemoryClient:
         summary: str = "",
         key_points: Optional[List[str]] = None,
         provenance: Optional["Provenance"] = None,
+        assistant: Optional[str] = None,
     ) -> bool:
         """Write a single Fact node directly to Neo4j with optional provenance.
 
@@ -345,10 +325,19 @@ class MemoryClient:
             summary:    Short description of the fact.
             key_points: Bullet-point details.
             provenance: Optional Provenance; writes provenance_* Neo4j props.
+            assistant: Mind to tag the Fact with, and the writer identity the
+                ownership guard checks. Default None writes an *untagged* Fact —
+                and an untagged writer cannot update a Fact already tagged with
+                a mind: that write is refused and returns False. An untagged
+                existing Fact is library memory any writer may update and claim.
 
         Returns:
-            True on success, False if Neo4j is unreachable or write failed.
-            Never raises.
+            True on success, False if Neo4j is unreachable, the write failed, or
+            the existing Fact is owned by another mind. Never raises.
+
+        Facts are embedded with the canonical text (spec §4) when local Ollama
+        and the ``RetrievalConfig`` node are available; otherwise the text is
+        written and ``ai-memory embed --all`` supplies the vector later.
         """
         from datetime import datetime, timezone
         topic = {
@@ -360,7 +349,7 @@ class MemoryClient:
             'provenance': provenance,
         }
         try:
-            return _write_fact(topic, driver=self.driver())
+            return _write_fact(topic, assistant=assistant, driver=self.driver())
         except Exception:
             return False
 
@@ -390,4 +379,12 @@ __all__ = [
     'parse_learned_topics',
     'sync_facts',
     'rebuild_graph',
+    'fact_embed_text',
+    'embed_all',
+    'vector_stats',
+    'maintain_edges_for',
+    'rebuild_edges',
+    'edge_stats',
+    'duplicate_report',
+    'supersede_fact',
 ]

@@ -6,23 +6,30 @@ Neo4j write functions (sync_facts, rebuild_graph) require a running Neo4j instan
 
 Public API:
   parse_learned_topics(content, filepath)         — parse markdown for learned sections
-  extract_words(name, min_length)                 — word tokenisation for the Word index
+  extract_words(name, min_length)                 — word tokenisation (still used by is_topic_saturated)
   normalize_name(name)                            — lowercase + strip punctuation
   is_topic_saturated(name, existing, threshold)   — deduplication guard
-  link_related_facts(tx, max_df_ratio, min_shared)— rebuild RELATED_TO via Word index
-  cleanup_orphaned_words(tx)                      — delete Word nodes with no Facts
-  sync_facts(topics, workspace, assistant)        — MERGE Fact nodes + Word index
-  rebuild_graph(workspace)                        — rebuild RELATED_TO edges
+  sync_facts(topics, workspace, assistant)        — MERGE Fact nodes + Word index + edge maintenance
+  rebuild_graph(workspace)                        — nightly full RELATED_TO edge rebuild (wordindex.rebuild_edges)
+  maintain_edges_after_write(session, name)       — on-write edge maintenance for one Fact (also used by scripts/neo4j_sync.py)
 """
 import dataclasses
+import logging
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Set
 
+from neo4j.exceptions import TransientError
+
 from ai_memory._config import get_driver
+from ai_memory.embed import build_embed_subquery, embed_params, embed_text, fact_embed_text, text_sha
 from ai_memory.provenance import Provenance
+from ai_memory.retrieval_config import load_retrieval_config
+from ai_memory.wordindex import load_edge_config, maintain_edges_for, tokenize
+
+log = logging.getLogger("ai_memory.learn")
 
 
 # -------------------------------------------------------------------------
@@ -360,43 +367,6 @@ def parse_learned_topics(content: str, filepath: Path) -> List[dict]:
 # Neo4j transaction helpers (public — used by sync_facts and CLI wrapper)
 # -------------------------------------------------------------------------
 
-def link_related_facts(tx, max_df_ratio: float = 0.3, min_shared: int = 1) -> None:
-    """Rebuild RELATED_TO edges between Facts that share Word index entries.
-
-    Deletes all existing RELATED_TO edges first to prevent stale data.
-    Uses Word index for O(n × avg_words) instead of O(n²) cartesian product.
-    """
-    tx.run("""
-        MATCH (w:Word)<-[:HAS_WORD]-(f:Fact)
-        WITH w, count(DISTINCT f) AS df
-        SET w.df = df
-    """)
-    result = tx.run("MATCH (f:Fact) RETURN count(f) AS total")
-    total_facts = result.single()['total']
-    max_df = int(total_facts * max_df_ratio)
-    tx.run("MATCH ()-[r:RELATED_TO]->() DELETE r")
-    tx.run("""
-        MATCH (f1:Fact)-[:HAS_WORD]->(w:Word)<-[:HAS_WORD]-(f2:Fact)
-        WHERE elementId(f1) < elementId(f2) AND (w.df IS NULL OR w.df <= $max_df)
-        WITH f1, f2, collect(DISTINCT w.text) AS shared
-        WHERE size(shared) >= $min_shared
-        MERGE (f1)-[r:RELATED_TO]->(f2)
-        SET r.shared_keywords = shared,
-            r.shared_count = size(shared)
-    """, max_df=max_df, min_shared=min_shared)
-
-
-def cleanup_orphaned_words(tx) -> None:
-    """Delete Word nodes that have no associated Fact nodes."""
-    tx.run("MATCH (w:Word) WHERE NOT (()-[:HAS_WORD]->(w)) DELETE w")
-
-
-def _post_sync_tx(tx, max_df_ratio: float = 0.1, min_shared: int = 2) -> None:
-    """Combined maintenance transaction: rebuild RELATED_TO + clean up orphaned Words."""
-    link_related_facts(tx, max_df_ratio=max_df_ratio, min_shared=min_shared)
-    cleanup_orphaned_words(tx)
-
-
 # -------------------------------------------------------------------------
 # Neo4j write functions
 # -------------------------------------------------------------------------
@@ -407,21 +377,27 @@ def write_fact(
     assistant: Optional[str] = None,
     driver=None,
     workspace=None,
+    embed_fn=embed_text,
 ) -> bool:
     """Write a single Fact node to Neo4j.
 
     ``topic`` must have keys: name, summary, key_points, source_file, created_at.
     An optional ``provenance`` key (Provenance instance) writes provenance_* props.
 
-    Returns True on success, False on any error (including unreachable Neo4j).
-    Never raises.
+    Returns True on success, False on any error (including unreachable Neo4j) and
+    when the existing Fact of that name is tagged with another ``assistant`` — that
+    write is refused outright (see ``owner_blocks_write``). Never raises.
     """
     owns_driver = driver is None
     try:
         if owns_driver:
             driver = get_driver(workspace)
         with driver.session() as session:
-            result = session.execute_write(_sync_fact_tx, topic, assistant)
+            cfg = _load_cfg(session)
+            embed, tokens = _prepare_embed(session, topic, cfg, embed_fn)
+            result = session.execute_write(_sync_fact_tx, topic, assistant, embed=embed, tokens=tokens)
+            if result:
+                maintain_edges_after_write(session, topic['name'])
             return bool(result)
     except Exception:
         return False
@@ -430,10 +406,122 @@ def write_fact(
             driver.close()
 
 
-def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
-    """Transaction: MERGE a Fact node + Word index edges."""
+def _load_cfg(session):
+    """RetrievalConfig or None; a writer that cannot read it stores text and skips the vector (§4)."""
     try:
-        words = extract_words(topic['name'])
+        return load_retrieval_config(session)
+    except Exception as e:  # noqa: BLE001
+        print(f"RetrievalConfig unavailable ({e}); writing text without embedding", file=sys.stderr)
+        return None
+
+
+def _load_edge_cfg(session):
+    """Edge-layer config (spec §7.4) or None when unavailable/not yet built; mirrors _load_cfg —
+    a writer that cannot read it just skips edge maintenance for this write."""
+    try:
+        return load_edge_config(session)
+    except Exception as e:  # noqa: BLE001
+        log.warning("edge config unavailable (%s); skipping edge maintenance", e)
+        return None
+
+
+def maintain_edges_after_write(session, name: str) -> None:
+    """Load the edge config and run on-write maintenance for one Fact. Never lets a failure
+    here abort the caller's write — this only ever runs after the Fact write already succeeded.
+
+    Public — also called by scripts/neo4j_sync.py after its own Fact writes."""
+    edge_cfg = _load_edge_cfg(session)
+    if edge_cfg is None:
+        return
+    try:
+        result = maintain_edges_for(session, name, edge_cfg)
+        log.debug("edge maintenance for %r: %s", name, result)
+    except Exception as e:  # noqa: BLE001 — the nightly rebuild repairs edges; never abort the write
+        log.warning("edge maintenance failed for %r: %s", name, e)
+
+
+_maintain_edges = maintain_edges_after_write  # legacy private name, kept as an alias
+
+
+def _prepare_embed(session, topic, cfg, embed_fn):
+    """Prepare the canonical text (spec §4) and its Word-index tokens, and — outside the write
+    transaction, so a stalled Ollama can never hold a Fact lock — embed it when possible.
+
+    Tokens follow `cfg`, not `embed_fn`: whenever a RetrievalConfig is available, tokens are
+    computed from the full prepared text (name + summary + key_points + the Fact's existing
+    `content`, with real boilerplate stripped) — matching rebuild_edges' fact_embed_text(...)
+    exactly — even when `embed_fn` is None (the scripts/rlm/neo4j_learn_sync.py production path,
+    which embeds separately itself). Only a missing `cfg` falls back to empty boilerplate with
+    no `content` read (there is nothing to strip boilerplate against, and no config version to
+    validate a CAS write with anyway).
+
+    Returns ``(embed, tokens)``: ``embed`` is the embed params dict (incl. cas_content) or None
+    when no vector is available (no cfg, no embed_fn, empty text, or the embed call itself
+    returning nothing); ``tokens`` (from the same prepared text) is always a list.
+    """
+    if cfg is None:
+        text = fact_embed_text(topic['name'], topic['summary'], topic['key_points'], None, ())
+        return None, tokenize(text, topic['name'])
+    rec = session.run("OPTIONAL MATCH (f:Fact {name: $name}) RETURN f.content AS content", name=topic['name']).single()
+    content_seen = rec['content'] if rec else None
+    text = fact_embed_text(topic['name'], topic['summary'], topic['key_points'], content_seen, cfg.boilerplate)
+    tokens = tokenize(text, topic['name'])
+    if embed_fn is None or not text.strip():
+        return None, tokens
+    vec = embed_fn(text)
+    if not vec:
+        return None, tokens
+    return embed_params(vec, text_sha(text, cfg.version), cfg.version, cas={"content": content_seen}), tokens
+
+
+_OWNER_READ = "OPTIONAL MATCH (f:Fact {name: $name}) RETURN f.assistant AS owner"
+
+
+def owner_blocks_write(owner, writer: "str | None") -> "str | None":
+    """Reason ``writer`` may not update a Fact tagged ``owner``, or None when it may.
+
+    Mirrors the grok client's ``_owner_blocks_write``
+    (grok/skills/neo4j-memory/scripts/neo4j_memory.py) with one deliberate
+    relaxation: an **untagged** Fact (NULL/blank ``assistant``) is the library's
+    own inherited memory and any writer may update — and thereby claim — it,
+    where grok refuses without ``--force-assistant``. A Fact tagged with another
+    mind is refused outright, with no force escape on either side; a writer that
+    passes no assistant is a *different* writer, not a wildcard.
+
+    Public — also used by scripts/neo4j_sync.py.
+    """
+    if owner is None or (isinstance(owner, str) and not owner.strip()):
+        return None
+    if owner != writer:
+        return f"owned by {owner!r}"
+    return None
+
+
+def refuse_owner_conflict(name: str, owner, writer: "str | None") -> None:
+    """One stderr line naming the Fact, its owner and the writer that was refused."""
+    who = repr(writer) if writer else "untagged"
+    print(f"Refusing to overwrite Fact {name!r} owned by {owner!r} (writer: {who})", file=sys.stderr)
+
+
+def _sync_fact_tx(tx, topic: dict, assistant: "str | None" = None, *, embed: "dict | None" = None,
+                  tokens=None) -> bool:
+    """Transaction: MERGE a Fact node + Word index edges; when `embed` (built by `_prepare_embed`
+    outside this transaction) is provided, the same statement sets the vector and its provenance
+    (CAS on `content`, the one text field this writer does not own — spec §4). `tokens` (also
+    from `_prepare_embed`) replaces the old name-only word list; when omitted (direct callers),
+    falls back to `extract_words(topic['name'])`.
+
+    Reads the existing Fact's `assistant` first, in the same transaction, and refuses
+    the whole write when it is another mind's (`owner_blocks_write`) — MERGE-by-name is
+    an in-place overwrite, and no library writer may silently clobber Nova/Weft content.
+    A refused Fact returns False, so callers neither count it nor maintain its edges."""
+    try:
+        existing = tx.run(_OWNER_READ, name=topic['name']).single()
+        owner = existing.get("owner") if existing is not None else None
+        if owner_blocks_write(owner, assistant):
+            refuse_owner_conflict(topic['name'], owner, assistant)
+            return False
+        words = tokens if tokens is not None else extract_words(topic['name'])
         params = {
             'name': topic['name'],
             'summary': topic['summary'],
@@ -460,6 +548,11 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
                 param_key = f'prov_{f.name}'
                 set_clause += f', f.provenance_{f.name} = ${param_key}'
                 params[param_key] = prov_dict.get(f.name)  # None for cleared fields
+        embed_block, embed_return = "", ""
+        if embed is not None:
+            embed_block = "WITH DISTINCT f\n" + build_embed_subquery(["content"]) + "\n"
+            embed_return = ", embedded"
+            params.update(embed)
         result = tx.run(f"""
             MERGE (f:Fact {{name: $name}})
             {set_clause}
@@ -469,7 +562,7 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
             WITH f
             MERGE (s:Source {{name: $source_file}})
             MERGE (f)-[:FROM_SOURCE]->(s)
-            RETURN f.name as name
+            {embed_block}RETURN f.name AS name{embed_return}
         """, **params)
         if not result.single():
             return False
@@ -486,6 +579,8 @@ def _sync_fact_tx(tx, topic: dict, assistant: Optional[str] = None) -> bool:
                 MERGE (f)-[:HAS_WORD]->(w)
             """, name=topic['name'], words=words)
         return True
+    except TransientError:
+        raise                      # let execute_write's managed retry handle deadlocks / leader switches
     except Exception as e:
         print(f"Error syncing topic '{topic.get('name', 'unknown')}': {e}", file=sys.stderr)
         return False
@@ -496,12 +591,17 @@ def sync_facts(
     *,
     workspace=None,
     assistant: Optional[str] = None,
+    embed_fn=embed_text,
 ) -> int:
     """MERGE topic dicts as Fact nodes + Word index in Neo4j.
 
-    Runs post-sync maintenance: word frequencies, RELATED_TO rebuild,
-    orphaned word cleanup. Returns count of successfully synced facts.
-    Returns 0 immediately if topics is empty.
+    After each successfully-synced Fact, runs on-write edge maintenance
+    (wordindex.maintain_edges_for) when the edge layer has been built; a failure there
+    never aborts the Fact write (the nightly rebuild repairs edges). Returns count of
+    successfully synced facts. Returns 0 immediately if topics is empty.
+
+    A Fact whose name is already tagged with a different ``assistant`` is refused
+    (``owner_blocks_write``): it is neither counted nor edge-maintained.
     """
     if not topics:
         return 0
@@ -514,10 +614,18 @@ def sync_facts(
                 "CREATE CONSTRAINT word_text_unique IF NOT EXISTS "
                 "FOR (w:Word) REQUIRE w.text IS UNIQUE"
             )
+            cfg = _load_cfg(session)
+            edge_cfg = _load_edge_cfg(session)
             for topic in topics:
-                if session.execute_write(_sync_fact_tx, topic, assistant):
+                embed, tokens = _prepare_embed(session, topic, cfg, embed_fn)
+                if session.execute_write(_sync_fact_tx, topic, assistant, embed=embed, tokens=tokens):
                     synced += 1
-            session.execute_write(_post_sync_tx, max_df_ratio=0.1, min_shared=2)
+                    if edge_cfg is not None:
+                        try:
+                            result = maintain_edges_for(session, topic['name'], edge_cfg)
+                            log.debug("edge maintenance for %r: %s", topic['name'], result)
+                        except Exception as e:  # noqa: BLE001 — the nightly rebuild repairs edges
+                            log.warning("edge maintenance failed for %r: %s", topic['name'], e)
         return synced
     finally:
         if driver is not None:
@@ -525,18 +633,16 @@ def sync_facts(
 
 
 def rebuild_graph(*, workspace=None) -> int:
-    """Rebuild all RELATED_TO edges from the current Word index.
+    """Nightly full rebuild of the word index + RELATED_TO edge layer (spec §7.5).
 
     Does not create or modify Fact nodes. Returns the resulting edge count.
     """
     driver = None
     try:
         driver = get_driver(workspace)
-        with driver.session() as session:
-            session.execute_write(_post_sync_tx, max_df_ratio=0.1, min_shared=2)
-            result = session.run("MATCH ()-[r:RELATED_TO]->() RETURN count(r) AS cnt")
-            rec = result.single()
-            return rec['cnt'] if rec else 0
+        from ai_memory.wordindex import rebuild_edges
+        report = rebuild_edges(driver)
+        return report["edges_written"]
     finally:
         if driver is not None:
             driver.close()

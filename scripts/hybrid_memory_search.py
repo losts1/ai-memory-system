@@ -18,7 +18,7 @@ import argparse
 import sys
 
 from ai_memory._config import get_workspace
-from ai_memory.search import search_faiss, search_files, search_graph, search_vector
+from ai_memory.search import search_faiss, search_files, search_hybrid
 from ai_memory.metadata import apply_fields_filter, apply_metadata_only
 
 
@@ -78,7 +78,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Hybrid memory search")
     parser.add_argument("query", help="Search query")
     parser.add_argument("--max-results", "-n", type=int, default=5)
-    parser.add_argument("--graph", action="store_true", help="Include graph relationships")
+    parser.add_argument("--graph", action="store_true",
+                        help="alias for --mode hybrid (kept for compatibility; no longer "
+                             "adds a relationships section)")
     parser.add_argument("--files-only", action="store_true", help="Only search files")
     parser.add_argument("--use-embeddings", action="store_true",
                         help="Use local FAISS index instead of Neo4j vector search")
@@ -88,6 +90,9 @@ def main() -> None:
                         help="Return lightweight metadata only (Phase 4 RLM lazy loading)")
     parser.add_argument("--fields", default=None,
                         help="Comma-separated fields to return (e.g. name,summary)")
+    parser.add_argument("--space", default=None, help="Filter to a space (e.g. shared)")
+    parser.add_argument("--mode", choices=("hybrid", "fulltext", "vector"), default="hybrid",
+                        help="hybrid (default), fulltext-only, or vector-only")
     args = parser.parse_args()
 
     workspace = get_workspace()
@@ -111,30 +116,24 @@ def main() -> None:
 
     # Collect results
     if args.use_embeddings:
-        semantic_results = search_faiss(args.query, workspace=workspace, max_results=args.max_results)
-        sem_label = "FAISS"
+        results = search_faiss(args.query, workspace=workspace, max_results=args.max_results)
+        label = "FAISS"
     else:
-        semantic_results = search_vector(args.query, workspace=workspace,
-                                         max_results=args.max_results, assistant=assistant)
-        sem_label = f"Neo4j Vector{' [' + assistant + ']' if assistant else ''}"
-
-    graph_results = []
-    if args.graph:
-        graph_results = search_graph(args.query, workspace=workspace,
-                                     max_results=args.max_results, assistant=assistant)
+        results = search_hybrid(args.query, workspace=workspace, k=args.max_results,
+                                assistant=assistant, space=args.space,
+                                mode="hybrid" if args.graph else args.mode)
+        label = f"hybrid{' [' + assistant + ']' if assistant else ''}"
 
     file_results = search_files(args.query, workspace=workspace, max_results=args.max_results)
 
     # Apply Phase 4 transforms before output
     if args.metadata_only:
-        semantic_results = [apply_metadata_only(r) for r in semantic_results]
-        graph_results = [apply_metadata_only(r) for r in graph_results]
+        results = [apply_metadata_only(r) for r in results]
         file_results = [apply_metadata_only(r) for r in file_results]
 
     if args.fields:
         requested = [f.strip() for f in args.fields.split(',')]
-        semantic_results = [apply_fields_filter(r, requested) for r in semantic_results]
-        graph_results = [apply_fields_filter(r, requested) for r in graph_results]
+        results = [apply_fields_filter(r, requested) for r in results]
         file_results = [apply_fields_filter(r, requested) for r in file_results]
 
     def _emit_section(header: str, results: list, query_type: str) -> None:
@@ -146,13 +145,7 @@ def main() -> None:
         print(header)
         format_output(results, query_type)
 
-    _emit_section(f"Semantic result ({sem_label})", semantic_results, sem_label)
-    if args.graph:
-        graph_header = (
-            f"\nGraph Relationships (Neo4j)"
-            f"{' [' + assistant + ']' if assistant else ''}"
-        )
-        _emit_section(graph_header, graph_results, "Neo4j Graph")
+    _emit_section(f"Semantic result ({label})", results, label)
     _emit_section("\nFile Search (grep)", file_results, "Files")
 
 

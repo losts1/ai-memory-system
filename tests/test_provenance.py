@@ -137,7 +137,8 @@ def test_sync_fact_tx_clears_stale_provenance_on_update():
     }
     _sync_fact_tx(tx, topic)
 
-    first_call = all_calls_params[0]
+    # calls[0] is the ownership read (review #2); the MERGE write is the one carrying $summary
+    write_call = next(p for p in all_calls_params if 'summary' in p)
     # risk_score was None → to_dict() omits it → but prov_risk_score must still be in params
-    assert 'prov_risk_score' in first_call
-    assert first_call['prov_risk_score'] is None  # must be written as NULL, not omitted
+    assert 'prov_risk_score' in write_call
+    assert write_call['prov_risk_score'] is None  # must be written as NULL, not omitted

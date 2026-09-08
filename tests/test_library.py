@@ -74,6 +74,24 @@ def test_apply_metadata_only_strips_to_teaser():
     assert result["score"] == 0.9
 
 
+def test_apply_metadata_only_uses_teaser_from_search_hit():
+    """I1: search_vector/search_graph hits (via _rows_to_hits) carry `teaser`,
+    not `summary`/`content` — apply_metadata_only must read it."""
+    from ai_memory.metadata import apply_metadata_only
+    hit = {
+        "name": "Kelly Criterion",
+        "teaser": "about Kelly Criterion",
+        "key_points": ["p"],
+        "assistant": "Grok",
+        "status": None,
+        "space": None,
+        "score": 0.9,
+        "via": "vec",
+    }
+    result = apply_metadata_only(hit)
+    assert result["teaser"] == hit["teaser"]
+
+
 def test_apply_fields_filter():
     from ai_memory.metadata import apply_fields_filter
     result = apply_fields_filter({"name": "X", "score": 0.5, "extra": "y"}, ["name", "score"])
@@ -397,6 +415,15 @@ def test_validate_schema_signature():
     assert "vector_index" in sig.parameters
 
 
+def test_validate_schema_return_annotation_and_docstring_reflect_retrieval_config():
+    import inspect
+
+    from ai_memory._config import validate_schema
+    sig = inspect.signature(validate_schema)
+    assert str(sig.return_annotation) == "typing.Dict[str, typing.Any]"
+    assert '"retrieval_config": "version N" | "missing"' in validate_schema.__doc__
+
+
 def test_config_expected_constraints_matches_verify_schema():
     """_config.py EXPECTED_CONSTRAINTS must be consistent with scripts/verify_schema.py.
     Mirrors the indexes parity guard — constraints have two separate hardcoded sets."""
@@ -440,35 +467,50 @@ def test_config_expected_fulltext_props_matches_verify_schema():
     )
 
 
-def test_search_graph_cypher_uses_related_to_or_learned_in():
-    """Issue #N3: search_graph must walk RELATED_TO|LEARNED_IN, not LEARNED_IN
-    alone. Inspect the function's source as a regression guard."""
-    import inspect
-    from ai_memory.search import search_graph
-    src = inspect.getsource(search_graph)
-    assert "RELATED_TO|LEARNED_IN" in src, \
-        "search_graph must traverse both relationship types"
-    assert "[:LEARNED_IN]->" not in src, \
-        "the lone LEARNED_IN traversal was the v1.3.1 bug; should be replaced"
+def test_config_expected_fulltext_kp_props_matches_verify_schema():
+    """_config.py EXPECTED_FULLTEXT_KP_PROPS must match verify_schema.py."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    from ai_memory._config import EXPECTED_FULLTEXT_KP_PROPS as config_props
+    from verify_schema import EXPECTED_FULLTEXT_KP_PROPS as vs_props
+    assert config_props == vs_props, (
+        f"_config.py EXPECTED_FULLTEXT_KP_PROPS {config_props} != "
+        f"verify_schema.py {vs_props}"
+    )
 
 
-def test_search_graph_uses_configurable_fulltext_index():
-    """search_graph must use $fulltext_index Cypher param (from NEO4J_FULLTEXT_INDEX env)
-    rather than passing the index name as a hardcoded string literal to queryNodes."""
-    import inspect
+def test_search_graph_cypher_has_no_related_facts_join():
+    """The RELATED_TO|LEARNED_IN join that used to compute related_facts is
+    gone; that responsibility moved to graph=True semantics (Task 7,
+    MIGRATION.md). Inspect the actual query text sent to the driver."""
+    from tests.test_search_path import FakeDriver
     from ai_memory.search import search_graph
-    src = inspect.getsource(search_graph)
-    assert "$fulltext_index" in src, \
-        "search_graph must pass $fulltext_index as a parameterised Cypher argument"
-    assert "queryNodes('fact_content'" not in src, \
-        "search_graph must not hardcode 'fact_content' as the queryNodes argument"
+    drv = FakeDriver([lambda t, p: [], lambda t, p: []])
+    search_graph("q", driver=drv)
+    for q, _ in drv.session_obj.calls:
+        assert "RELATED_TO" not in q.text
+
+
+def test_search_graph_uses_configurable_fulltext_index(monkeypatch):
+    """search_graph must read the content-index name from NEO4J_FULLTEXT_INDEX
+    (not a hardcoded 'fact_content') and pass it as the $index query param."""
+    monkeypatch.setenv("NEO4J_FULLTEXT_INDEX", "custom_content_index")
+    from tests.test_search_path import FakeDriver
+    from ai_memory.search import search_graph
+    drv = FakeDriver([lambda t, p: [], lambda t, p: []])
+    search_graph("q", driver=drv)
+    first_params = drv.session_obj.calls[0][1]
+    assert first_params["index"] == "custom_content_index"
 
 
 def test_search_vector_cypher_omits_node_id():
     """node.id is not written by learn.py and is unused in result construction.
     Fetching it adds payload with no benefit — regression guard for its removal."""
     import inspect
+    from ai_memory import search as _s
     from ai_memory.search import search_vector
+    _s.reset_fallback()
     src = inspect.getsource(search_vector)
     assert "node.id AS id" not in src, \
         "search_vector must not fetch unused node.id"
@@ -774,6 +816,11 @@ def test_write_fact_does_not_close_supplied_driver():
     mock_session = MagicMock()
     mock_driver.session.return_value.__enter__ = MagicMock(return_value=mock_session)
     mock_driver.session.return_value.__exit__ = MagicMock(return_value=False)
+    # Every session.run(...).single() call reports "nothing found" (no RetrievalConfig,
+    # no edge config, no existing Fact) — an unconfigured MagicMock would otherwise answer
+    # every query with fabricated-but-truthy field values via its numeric/iter dunder
+    # defaults, which is not how a real empty database behaves.
+    mock_session.run.return_value.single.return_value = None
     mock_session.execute_write.return_value = True
 
     topic = {
@@ -784,7 +831,7 @@ def test_write_fact_does_not_close_supplied_driver():
         'created_at': '2026-06-07T00:00:00Z',
         'provenance': None,
     }
-    result = write_fact(topic, driver=mock_driver)
+    result = write_fact(topic, driver=mock_driver, embed_fn=None)
     assert result is True
     mock_driver.close.assert_not_called()
 
@@ -816,7 +863,7 @@ def test_memory_client_write_returns_bool_without_neo4j(tmp_path):
             key_points=["point one"],
             provenance=Provenance(source="api", trust="trusted"),
         )
-    assert isinstance(result, bool)
+    assert result is False
 
 
 def test_memory_client_write_passes_provenance_to_write_fact():
@@ -840,6 +887,27 @@ def test_memory_client_write_passes_provenance_to_write_fact():
     assert captured_topics[0]['provenance'] is prov
     assert captured_topics[0]['name'] == "Test Fact"
     assert captured_topics[0]['source_file'] == 'api'
+
+
+def test_memory_client_write_passes_assistant_to_write_fact():
+    """Private #2: write(assistant=...) must reach write_fact, so the ownership
+    guard has a writer identity; the default stays untagged."""
+    from unittest.mock import MagicMock, patch
+    from ai_memory import MemoryClient
+
+    captured = []
+
+    def fake_write_fact(topic, **kwargs):
+        captured.append(kwargs.get('assistant'))
+        return True
+
+    with patch('ai_memory._write_fact', side_effect=fake_write_fact):
+        with MemoryClient() as client:
+            client._driver = MagicMock()  # prevent real Neo4j driver creation
+            client.write("Test Fact", summary="s", assistant="Claude")
+            client.write("Test Fact", summary="s")
+
+    assert captured == ["Claude", None]
 
 
 # ---------------------------------------------------------------------------
@@ -885,12 +953,15 @@ def test_search_graph_empty_query_with_trust_filter_returns_empty():
 
 
 def test_search_vector_passes_trust_filter_to_session_run():
-    """trust_filter must reach the session.run kwargs, not be silently dropped."""
+    """trust_filter must reach the query as $trust, not be silently dropped."""
     import sys
     from unittest.mock import MagicMock, patch
+    from ai_memory import search as _s
     from ai_memory.search import search_vector
 
-    captured_kwargs: dict = {}
+    _s.reset_fallback()
+    captured_query = {}
+    captured_params: dict = {}
 
     # search_vector does `import ollama` inside the function; inject a fake module
     # so the import succeeds even when ollama is not installed.
@@ -900,8 +971,9 @@ def test_search_vector_passes_trust_filter_to_session_run():
     mock_result = MagicMock()
     mock_result.__iter__ = MagicMock(return_value=iter([]))
 
-    def capturing_run(cypher, **kwargs):
-        captured_kwargs.update(kwargs)
+    def capturing_run(query, params=None, **kwargs):
+        captured_query["query"] = query
+        captured_params.update(params or {})
         return mock_result
 
     mock_session = MagicMock()
@@ -916,8 +988,11 @@ def test_search_vector_passes_trust_filter_to_session_run():
          patch("ai_memory.search.get_driver", return_value=mock_driver):
         search_vector("test query", trust_filter="trusted")
 
-    assert "trust_filter" in captured_kwargs
-    assert captured_kwargs["trust_filter"] == "trusted"
+    # the query object's .text carries the $trust placeholder (build_filters
+    # names the trust param "trust", not "trust_filter"); the value travels
+    # in the params dict passed alongside it.
+    assert "$trust" in captured_query["query"].text
+    assert captured_params.get("trust") == "trusted"
 
 
 def test_memory_client_search_trust_filter_empty_string_raises():
@@ -976,3 +1051,27 @@ def test_memory_client_search_trust_filter_with_faiss_raises():
         client._driver = MagicMock()
         with pytest.raises(ValueError, match="trust_filter"):
             client.search("query", use_embeddings=True, trust_filter="trusted")
+
+
+def test_memory_client_search_graph_with_non_hybrid_mode_raises():
+    """graph=True restates hybrid; combining it with mode="vector"/"fulltext" is
+    contradictory and must raise rather than silently running hybrid."""
+    import pytest
+    from unittest.mock import MagicMock
+    from ai_memory import MemoryClient
+    with MemoryClient() as client:
+        client._driver = MagicMock()
+        for bad in ("vector", "fulltext"):
+            with pytest.raises(ValueError, match="graph=True"):
+                client.search("query", graph=True, mode=bad)
+
+
+def test_neo4j_seed_creates_key_points_fulltext_index():
+    src = open("scripts/neo4j_seed.py", encoding="utf-8").read()
+    assert "CREATE FULLTEXT INDEX fact_key_points IF NOT EXISTS" in src
+    assert "ON EACH [n.key_points]" in src
+
+
+def test_config_expects_key_points_fulltext_index():
+    from ai_memory import _config
+    assert _config.EXPECTED_FULLTEXT_KP == "fact_key_points"

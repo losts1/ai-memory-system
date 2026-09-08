@@ -50,6 +50,29 @@ chmod +x ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py
 
 Hook commands use `${HOME}/.grok/...`. Do not bake in a specific username.
 
+The TUI does not import this checkout. `~/.grok/skills/neo4j-memory/` is a
+**copy**. A commit in the repo does nothing until you copy again.
+
+**Root cause (review finding):** an older line here said to redeploy by copying
+only `neo4j_memory.py` and `test_neo4j_memory.py` — “no other files need to
+move.” That was false once `SKILL.md` changed (phases 4–5). Operators and
+agents followed it, so live `SKILL.md` stayed on shared-word `organize` /
+missing-only `embed` while the script had already moved on. The same skip
+of `diff -rq` (step 4) left `~/.grok` stale again after the #7 script
+commit: only `.py` changed that time, but nothing was copied at all.
+
+After **any** change under `grok/skills/neo4j-memory/` (scripts or
+`SKILL.md`), copy the whole directory and verify:
+
+```bash
+cp -r grok/skills/neo4j-memory/. ~/.grok/skills/neo4j-memory/
+chmod +x ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py
+diff -rq grok/skills/neo4j-memory ~/.grok/skills/neo4j-memory \
+  --exclude=__pycache__ --exclude=.pytest_cache && echo in-sync
+```
+
+Do not copy only the two `.py` files. Grok reads `SKILL.md` from `~/.grok`.
+
 ### 2. Credentials
 
 ```bash
@@ -76,8 +99,12 @@ CREATE FULLTEXT INDEX fact_key_points IF NOT EXISTS FOR (f:Fact) ON EACH [f.key_
 ```
 
 CLI search is **hybrid** (fulltext + Ollama
-`nomic-embed-text` against the vector index, RRF fusion). Ollama down or a
-missing index → fulltext only. The prompt hook uses the same hybrid path with a
+`nomic-embed-text` against the vector index, RRF fusion). The vector leg is a
+Cypher 25 `SEARCH ... WHERE ... LIMIT $k` clause; `search --assistant/--space/--trust`
+become equality filters evaluated inside the index itself (never `status`), which
+requires the phase-3 migrated index — the client has no fallback, so on an
+un-migrated index the vector leg errors and search degrades to fulltext-only, the
+same as Ollama being down. The prompt hook uses the same hybrid path with a
 5s shared deadline (3s embed / 4s Bolt / 1.5s connect, daemon workers) so it
 can rewrite `neo4j-hits.md` before the 8s UserPromptSubmit kill.
 
@@ -95,6 +122,8 @@ after reload.
 ### 4. Verify (required — do not claim success without this)
 
 ```bash
+# the deployed copy must match this repo — SKILL.md included, it is what Grok reads
+diff -rq grok/skills/neo4j-memory ~/.grok/skills/neo4j-memory --exclude=__pycache__ --exclude=.pytest_cache && echo in-sync
 python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py stats
 python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py search "a term you know is in the graph"
 echo '{"prompt":"a term you know is in the graph please search"}' \
@@ -141,11 +170,23 @@ python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py write \
 python3 ~/.grok/skills/neo4j-memory/scripts/neo4j_memory.py organize --assistant Grok
 ```
 
-Search is unfiltered (all minds). Write/organize default to `assistant=Grok` and
+Search is unfiltered by default (all minds); `--assistant`/`--space`/`--trust` scope
+it. Write MERGEs Fact fields, then embeds via Ollama in a separate
+compare-and-set statement that sets `embedding` together with
+`embedding_model`, `embedding_dim`, `embedding_text_sha`, and
+`boilerplate_version` from the canonical text (name, summary, key points,
+content; corpus boilerplate stripped per the live `RetrievalConfig`) — if the
+config node is missing, the write stores text only. `embed` backfills Facts
+missing `Fact.embedding` **or** carrying a foreign one (no
+`embedding_text_sha`), and aborts if `RetrievalConfig` is unreachable.
+Write/organize default to `assistant=Grok` and
 **refuse** `--assistant` other than Grok unless `--force-assistant`. Write MERGE
 on `Fact.name` also refuses if that name is already owned by a different
-assistant. `organize` adds `RELATED_TO` only among Grok Facts that share ≥2
-HAS_WORD tokens. It does not rebuild the rest of the graph.
+assistant. `organize` runs the library's on-write edge rule
+(`wordindex.maintain_edges_for`) over Grok's Facts — each Fact keeps its top-5
+`RELATED_TO` picks by a TF-IDF/embedding blend, not a shared-word count — and
+requires a published edge rule (run the library's `ai-memory nightly` first).
+It does not rebuild the rest of the graph.
 
 ## Rules you must keep
 

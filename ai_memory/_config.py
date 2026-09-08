@@ -1,7 +1,7 @@
 """Shared Neo4j connection and workspace config for the ai_memory library."""
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
@@ -12,6 +12,7 @@ from neo4j.exceptions import (
 )
 
 from ai_memory.exceptions import Neo4jConnectionError
+from ai_memory.vector_index import DEFAULT_FILTER_PROPS as EXPECTED_VECTOR_FILTER_PROPS
 
 
 # Driver tuning (issue #N1 / #N19 — bounded pool + lifetime; was unbounded).
@@ -127,18 +128,25 @@ EXPECTED_INDEXES = {
 # Fulltext index — tracked separately from range indexes
 EXPECTED_FULLTEXT = os.getenv("NEO4J_FULLTEXT_INDEX", "fact_content")
 EXPECTED_FULLTEXT_PROPS = {"name", "content", "summary"}
+EXPECTED_FULLTEXT_KP = os.getenv("NEO4J_FULLTEXT_KP_INDEX", "fact_key_points")
+EXPECTED_FULLTEXT_KP_PROPS = {"key_points"}
 
 
-def validate_schema(driver, *, vector_index: Optional[str] = None) -> Dict[str, List[str]]:
+def validate_schema(driver, *, vector_index: Optional[str] = None) -> Dict[str, Any]:
     """Compare the live schema against ai-memory's expectations.
 
-    Returns a dict ``{"ok": [...], "drift": [...], "missing": [...]}`` describing
-    constraints/indexes that match (by name+shape), exist with the right shape
-    but a different name (drift — common after IF NOT EXISTS re-creates), or
-    are missing entirely. Never raises; intended for diagnostics, not gating.
+    Returns a dict ``{"ok": [...], "drift": [...], "missing": [...], "vector_indexes": [...],
+    "retrieval_config": "version N" | "missing",
+    "vector_filter_props": "ok" | "missing: [..]" | "index not found"}`` describing
+    constraints/indexes that match (by name+shape), exist with the right shape but a
+    different name (drift — common after IF NOT EXISTS re-creates), or are missing
+    entirely. Never raises; intended for diagnostics, not gating.
 
     If ``vector_index`` is supplied, also verifies that index exists; otherwise
     reports the names of any vector indexes found so the caller can pick one.
+    ``vector_filter_props`` checks the same ``vector_index`` (or, when None, the
+    env ``NEO4J_VECTOR_INDEX`` default ``fact_embeddings``) for
+    ``EXPECTED_VECTOR_FILTER_PROPS`` coverage.
     """
     out: Dict[str, List[str]] = {"ok": [], "drift": [], "missing": [], "vector_indexes": []}
     with driver.session() as s:
@@ -170,6 +178,40 @@ def validate_schema(driver, *, vector_index: Optional[str] = None) -> Dict[str, 
                 out["ok"].append(f"fulltext index {EXPECTED_FULLTEXT!r}")
         if not ft_found:
             out["missing"].append(f"fulltext index {EXPECTED_FULLTEXT!r}")
+
+        # Fulltext index for key_points — check existence AND property coverage
+        ft_kp_found = False
+        for r in s.run(
+            "SHOW INDEXES YIELD name, type, properties "
+            "WHERE type = 'FULLTEXT' AND name = $name RETURN properties",
+            name=EXPECTED_FULLTEXT_KP,
+        ):
+            ft_kp_found = True
+            live_props = set(r["properties"] or [])
+            missing_props = EXPECTED_FULLTEXT_KP_PROPS - live_props
+            if missing_props:
+                out["drift"].append(
+                    f"fulltext index {EXPECTED_FULLTEXT_KP!r} missing properties: {sorted(missing_props)}"
+                )
+            else:
+                out["ok"].append(f"fulltext index {EXPECTED_FULLTEXT_KP!r}")
+        if not ft_kp_found:
+            out["missing"].append(f"fulltext index {EXPECTED_FULLTEXT_KP!r}")
+
+        cfg = list(s.run("MATCH (c:RetrievalConfig {id: 'current'}) RETURN c.version AS version"))
+        out["retrieval_config"] = f"version {cfg[0]['version']}" if cfg else "missing"
+
+        vi_name = vector_index or os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
+        vi_rows = list(s.run(
+            "SHOW INDEXES YIELD name, type, properties WHERE type = 'VECTOR' AND name = $name "
+            "RETURN properties",
+            name=vi_name,
+        ))
+        if not vi_rows:
+            out["vector_filter_props"] = "index not found"
+        else:
+            missing = sorted(set(EXPECTED_VECTOR_FILTER_PROPS) - set(vi_rows[0]["properties"] or []))
+            out["vector_filter_props"] = "ok" if not missing else f"missing: {missing}"
 
     for cname, shape in EXPECTED_CONSTRAINTS.items():
         if cname in present_c:

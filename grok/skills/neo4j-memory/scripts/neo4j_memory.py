@@ -10,13 +10,17 @@ the Neo4j vector index. Ollama down or a missing index → fulltext only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import re
 import sys
 import threading
 import urllib.error
 import urllib.request
+from collections import Counter
+from collections.abc import Sequence
 from concurrent.futures import Future, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,7 +47,8 @@ RRF_K = 60
 # Vector-only hybrid (Lucene empty): drop KNN neighbors below this cosine.
 # Measured 2026-08-31: true match ~0.88 (llm-router review); KeePassXC noise
 # ~0.75 (Nova WebSocket/asyncio). RRF path (both legs hit) is unfiltered.
-VECTOR_ONLY_MIN_SCORE = 0.80
+VECTOR_ONLY_FLOOR = 0.80
+VECTOR_ONLY_MIN_SCORE = VECTOR_ONLY_FLOOR  # alias kept for old references
 HOOK_EMBED_TIMEOUT = 3.0
 HOOK_BOLT_TIMEOUT = 4.0
 HOOK_CONNECT_TIMEOUT = 1.5
@@ -52,15 +57,11 @@ SEARCH_EMBED_TIMEOUT = 15.0
 SEARCH_BOLT_TIMEOUT = 15.0
 WRITE_EMBED_TIMEOUT = 30.0
 EMBED_FAIL_ABORT = 3
-FACT_EMBED_CHARS = 2000
+EMBED_CHARS = 2000
+FACT_EMBED_CHARS = EMBED_CHARS
 
 _LUCENE_SPECIAL = re.compile(r'[\+\-\&\|\!\(\)\{\}\[\]\^\"\~\*\?\:\/\\]')
-_WORD = re.compile(r"[a-z0-9]{3,}")
-_STOP = {
-    "the", "and", "for", "with", "from", "that", "this", "are", "was", "were",
-    "you", "your", "have", "has", "not", "but", "can", "how", "what", "when",
-    "why", "who", "into", "about", "just", "like", "then", "than", "them",
-}
+_LUCENE_OPS = re.compile(r"\b(AND|OR|NOT)\b")
 
 
 def _pick(raw: dict, key: str, default: str) -> str:
@@ -136,14 +137,14 @@ def _driver(connect_timeout: float | None = None):
     return drv, c
 
 
-def _daemon_submit(fn, *args) -> Future:
+def _daemon_submit(fn, *args, **kwargs) -> Future:
     fut: Future = Future()
 
     def run() -> None:
         if not fut.set_running_or_notify_cancel():
             return
         try:
-            fut.set_result(fn(*args))
+            fut.set_result(fn(*args, **kwargs))
         except Exception as e:
             if not fut.cancelled():
                 fut.set_exception(e)
@@ -153,7 +154,12 @@ def _daemon_submit(fn, *args) -> Future:
 
 
 def _escape_lucene(q: str) -> str:
-    return _LUCENE_SPECIAL.sub(lambda m: "\\" + m.group(), q.strip())
+    """Escape Lucene special characters and lower-case the boolean keywords so a
+    user's 'AND'/'OR'/'NOT' cannot parse as operators (spec §3). Copied verbatim
+    from ai_memory/search.py::_escape_lucene; parity is asserted by
+    tests/test_retrieval_contract.py."""
+    escaped = _LUCENE_SPECIAL.sub(lambda m: "\\" + m.group(), q)
+    return _LUCENE_OPS.sub(lambda m: m.group(1).lower(), escaped)
 
 
 def _teaser(text, n=TEASER) -> str:
@@ -167,20 +173,191 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _words(text: str) -> list[str]:
-    seen = []
-    for w in _WORD.findall(text.lower()):
-        if w in _STOP or w in seen:
-            continue
-        seen.append(w)
-    return seen[:12]
+_TOKEN = re.compile(r"[A-Za-z0-9]+")
 
 
-def _fact_text(name, summary=None, content=None, key_points=None) -> str:
-    parts = [name or "", summary or "", content or ""]
-    if key_points:
-        parts.extend(str(p) for p in key_points if p)
-    return " ".join(" ".join(parts).split())[:FACT_EMBED_CHARS]
+def normalize_ws(s: str) -> str:
+    return " ".join((s or "").split())
+
+
+def gram_tokens(text: str) -> list[str]:
+    return [m.group(0).lower() for m in _TOKEN.finditer(text or "")]
+
+
+def strip_boilerplate(text: str, grams, *, min_run: int = 2) -> str:
+    """Remove runs of >= min_run consecutive boilerplate grams; keep everything else verbatim
+    (whitespace-normalised). A lone boilerplate gram is kept."""
+    text = text or ""
+    grams = set(grams or ())
+    spans = [(m.start(), m.end(), m.group(0).lower()) for m in _TOKEN.finditer(text)]
+    toks = [s[2] for s in spans]
+    if not grams or len(toks) < 4:
+        return normalize_ws(text)
+    hit = [" ".join(toks[i:i + 4]) in grams for i in range(len(toks) - 3)]
+
+    # Find maximal runs of boilerplate grams and collect removal ranges
+    remove_ranges = []
+    i = 0
+    while i < len(hit):
+        if hit[i]:
+            j = i
+            while j < len(hit) and hit[j]:
+                j += 1
+            # Run from hit position i to j-1 covers tokens i to j+2
+            if j - i >= min_run:
+                run_start_token = i
+                run_end_token = j + 2
+                start_pos = spans[run_start_token][0]
+                if run_end_token + 1 < len(spans):
+                    end_pos = spans[run_end_token + 1][0]
+                else:
+                    end_pos = len(text)
+                remove_ranges.append((start_pos, end_pos))
+            i = j
+        else:
+            i += 1
+
+    # Build output by removing the identified ranges
+    if not remove_ranges:
+        return normalize_ws(text)
+    out = []
+    cursor = 0
+    for start, end in remove_ranges:
+        out.append(text[cursor:start])
+        cursor = end
+    out.append(text[cursor:])
+    return normalize_ws("".join(out))
+
+
+def fact_embed_text(name: str | None, summary: str | None, key_points, content: str | None, boilerplate) -> str:
+    parts = [name or ""]
+    if summary and summary.strip():
+        parts.append(summary.strip())
+    if isinstance(key_points, str):
+        key_points = [key_points]
+    for p in (key_points or []):
+        if p and str(p).strip():
+            parts.append("- " + str(p).strip())
+    if content and content.strip():
+        parts.append(content.strip())
+    prepared = normalize_ws("\n".join(parts))[:EMBED_CHARS]
+    return strip_boilerplate(prepared, boilerplate)
+
+
+def text_sha(text: str, version: int) -> str:
+    return hashlib.sha256(f"{version}\n{text}".encode()).hexdigest()[:16]
+
+
+def _fact_text(name, summary=None, content=None, key_points=None, boilerplate=()) -> str:
+    return fact_embed_text(name, summary, key_points, content, boilerplate)
+
+
+# --- Provenance-carrying CAS embed write (verbatim from ai_memory/embed.py; a contract
+# test asserts build_embed_subquery/embed_params produce identical output to the library's).
+
+EMBED_PARAM_NAMES = ("embedding", "embedding_model", "embedding_dim", "embedding_text_sha", "boilerplate_version")
+_CAS_EMPTY = {"summary": "''", "key_points": "[]", "content": "''"}
+
+
+def _cas_default(field: str):
+    """A fresh empty value for `field` — a function, not a shared dict entry, so a mutable
+    default (the `key_points` list) can never be aliased across calls."""
+    return [] if field == "key_points" else ""
+
+
+def build_embed_subquery(cas_fields: Sequence[str], *, keep_prev: bool = False) -> str:
+    """CALL subquery that sets embedding + provenance on `f` only if the CAS fields still match."""
+    for f in cas_fields:
+        if f not in _CAS_EMPTY:
+            raise ValueError(f"unknown CAS field {f!r}")
+    where = " AND ".join(f"coalesce(f.{f}, {_CAS_EMPTY[f]}) = $cas_{f}" for f in cas_fields) or "true"
+    sets = ["f.embedding_prev = f.embedding"] if keep_prev else []
+    sets += [f"f.{p} = ${p}" for p in EMBED_PARAM_NAMES]
+    return (
+        "CALL {\n"
+        "  WITH f\n"
+        f"  WITH f WHERE {where}\n"
+        f"  SET {', '.join(sets)}\n"
+        "  RETURN count(f) AS embedded\n"
+        "}"
+    )
+
+
+def embed_params(vector: list, sha: str, version: int, *, cas: dict) -> dict:
+    p = {"embedding": vector, "embedding_model": EMBED_MODEL, "embedding_dim": EMBED_DIM,
+         "embedding_text_sha": sha, "boilerplate_version": version}
+    for f, v in cas.items():
+        if f == "key_points":
+            # Stored as-is (a STRING key_points is tolerated, not coerced) so the CAS
+            # compares against whatever shape is actually on the node.
+            p[f"cas_{f}"] = [] if v is None else v if isinstance(v, str) else list(v)
+        else:
+            p[f"cas_{f}"] = v if v not in (None, "") else _cas_default(f)
+    return p
+
+
+def _read_fact_text(session, name: str) -> dict | None:
+    rec = session.run(
+        "MATCH (f:Fact {name: $name}) RETURN f.name AS name, f.summary AS summary, "
+        "f.key_points AS key_points, f.content AS content", name=name).single()
+    if rec is None:
+        return None
+    return {"name": rec["name"], "summary": rec["summary"], "key_points": rec["key_points"], "content": rec["content"]}
+
+
+def _embed_fact_cas(
+    session, name: str, cfg: dict, retrieval_cfg: dict | None, *, timeout: float | None, row: dict | None = None,
+) -> str:
+    """Read → prepare → embed → CAS write (all three text fields), stamping provenance from
+    `cfg` (the model/dim actually used) rather than the module defaults. Returns one of
+    embedded|cas_skipped|embed_failed|empty_text|missing|no_config.
+
+    `row` lets a caller that already read the Fact (e.g. to build the same text for
+    `_write_tokens`) pass it in instead of paying a second round trip; the prepared text is
+    still derived the same way from it, so both writers see identical canonical text."""
+    if retrieval_cfg is None:
+        return "no_config"
+    if row is None:
+        row = _read_fact_text(session, name)
+    if row is None:
+        return "missing"
+    text = fact_embed_text(row["name"], row["summary"], row["key_points"], row["content"], retrieval_cfg["boilerplate"])
+    if not text.strip():
+        return "empty_text"
+    vec = ollama_embed(text, cfg, timeout=timeout)
+    if not vec:
+        return "embed_failed"
+    version = retrieval_cfg["version"]
+    params = embed_params(
+        vec, text_sha(text, version), version,
+        cas={"summary": row["summary"], "key_points": row["key_points"], "content": row["content"]},
+    )
+    params["embedding_model"] = cfg["embed_model"]
+    params["embedding_dim"] = cfg["embed_dim"]
+    params["name"] = name
+    cypher = "MATCH (f:Fact {name: $name})\n" + build_embed_subquery(["summary", "key_points", "content"]) + "\nRETURN embedded"
+    rec = session.run(cypher, **params).single()
+    return "embedded" if rec and rec["embedded"] else "cas_skipped"
+
+
+_EMBED_STATUS_MSG = {
+    "no_config": "no RetrievalConfig",
+    "cas_skipped": "cas_skipped — concurrent edit",
+    "empty_text": "empty text",
+}
+
+
+def _load_retrieval_config(session) -> dict | None:
+    """(:RetrievalConfig {id: 'current'}) → {"version", "boilerplate"}; None when absent or unreadable (spec §4)."""
+    try:
+        rec = session.run(
+            "MATCH (c:RetrievalConfig {id: 'current'}) RETURN c.version AS version, c.boilerplate AS boilerplate"
+        ).single()
+    except _BOLT_FAIL:
+        return None
+    if rec is None or rec["version"] is None:
+        return None
+    return {"version": int(rec["version"]), "boilerplate": frozenset(rec["boilerplate"] or [])}
 
 
 def parse_embed_body(body: dict) -> list[float] | None:
@@ -271,6 +448,7 @@ def _hit_from_record(r) -> dict:
         "via": "",
         "status": status,
         "topic": topic,
+        "space": r["space"],
     }
 
 
@@ -278,72 +456,127 @@ def _query(cypher: str, timeout: float | None):
     return cypher if timeout is None else Query(cypher, timeout=timeout)
 
 
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def validate_index_name(name: str) -> str:
+    """Vector index names are inlined into the SEARCH clause (Neo4j rejects a parameter there),
+    so only plain identifiers are accepted."""
+    if not isinstance(name, str) or not _IDENT.match(name):
+        raise ValueError(f"invalid vector index name {name!r}: expected [A-Za-z_][A-Za-z0-9_]*")
+    return name
+
+
+def build_filters(assistant: str | None, space: str | None, trust: str | None) -> tuple[str, dict]:
+    """Equality predicates for the inputs that are set, AND-joined. Never status (spec §3)."""
+    clauses, params = [], {}
+    if assistant:
+        clauses.append("f.assistant = $assistant")
+        params["assistant"] = assistant
+    if space:
+        clauses.append("f.space = $space")
+        params["space"] = space
+    if trust:
+        clauses.append("f.provenance_trust = $trust")
+        params["trust"] = trust
+    return " AND ".join(clauses), params
+
+
+def build_vector_search_cypher(index: str, where: str) -> str:
+    name = validate_index_name(index)
+    inner = f"WHERE {where} " if where else ""
+    return (
+        "CYPHER 25\n"
+        "MATCH (f:Fact)\n"
+        f"SEARCH f IN (VECTOR INDEX `{name}` FOR $embedding {inner}LIMIT $k) SCORE AS s\n"
+        "RETURN f.name AS name, coalesce(f.summary, f.content) AS text, f.assistant AS assistant, "
+        "f.key_points AS key_points, f.status AS status, f.space AS space, f.topic AS topic, s AS score\n"
+        "ORDER BY s DESC"
+    )
+
+
+def _leg_filters(assistant: str | None, space: str | None, trust: str | None) -> dict:
+    """Only forward set filters, so callers (and mocks) with the old signature are unaffected."""
+    kw = {}
+    if assistant is not None:
+        kw["assistant"] = assistant
+    if space is not None:
+        kw["space"] = space
+    if trust is not None:
+        kw["trust"] = trust
+    return kw
+
+
 def search_fulltext(
     session, query: str, index: str, limit: int, bolt_timeout: float | None = None,
+    *, assistant: str | None = None, space: str | None = None, trust: str | None = None,
+    via: str = "ft",
 ) -> list[dict]:
-    lucene = _escape_lucene(query)
-    if not lucene or limit <= 0:
+    """`via` names the index this call queried ("ft" = content, "kp" = key points),
+    like ai_memory/search.py::search_graph tagging each index's rows separately —
+    a key-points-only hit must not claim it was found in the content index."""
+    if not query or not query.strip() or limit <= 0:
         return []
+    lucene = _escape_lucene(query)
+    where, params = build_filters(assistant, space, trust)
+    post = f"WHERE {where}\n" if where else ""
     rows = session.run(
         _query(
-            """
-            CALL db.index.fulltext.queryNodes($index, $q)
-            YIELD node, score
-            RETURN node.name AS name,
-                   coalesce(node.summary, node.content) AS text,
-                   node.assistant AS assistant,
-                   node.key_points AS key_points,
-                   node.status AS status,
-                   node.topic AS topic,
-                   score
-            ORDER BY score DESC
-            LIMIT $limit
-            """,
+            "CALL db.index.fulltext.queryNodes($index, $q)\n"
+            "YIELD node, score\n"
+            "WITH node AS f, score\n"
+            f"{post}"
+            "RETURN f.name AS name,\n"
+            "       coalesce(f.summary, f.content) AS text,\n"
+            "       f.assistant AS assistant,\n"
+            "       f.key_points AS key_points,\n"
+            "       f.status AS status,\n"
+            "       f.space AS space,\n"
+            "       f.topic AS topic,\n"
+            "       score\n"
+            "ORDER BY score DESC\n"
+            "LIMIT $limit",
             bolt_timeout,
         ),
         index=index,
         q=lucene,
         limit=limit,
+        **params,
     )
-    return [_hit_from_record(r) | {"via": "ft"} for r in rows]
+    return [_hit_from_record(r) | {"via": via} for r in rows]
 
 
 def search_vector(
     session, embedding: list[float], index: str, limit: int,
     bolt_timeout: float | None = None,
+    *, assistant: str | None = None, space: str | None = None, trust: str | None = None,
 ) -> list[dict]:
     if not embedding or limit <= 0:
         return []
+    where, params = build_filters(assistant, space, trust)
+    cypher = build_vector_search_cypher(index, where)
     rows = session.run(
-        _query(
-            """
-            CALL db.index.vector.queryNodes($index, $k, $embedding)
-            YIELD node, score
-            RETURN node.name AS name,
-                   coalesce(node.summary, node.content) AS text,
-                   node.assistant AS assistant,
-                   node.key_points AS key_points,
-                   node.status AS status,
-                   node.topic AS topic,
-                   score
-            ORDER BY score DESC
-            LIMIT $k
-            """,
-            bolt_timeout,
-        ),
-        index=index,
+        _query(cypher, bolt_timeout),
         k=limit,
         embedding=embedding,
+        **params,
     )
-    return [_hit_from_record(r) | {"via": "vec"} for r in rows]
+    hits = []
+    for r in rows:
+        h = _hit_from_record(r)
+        h["via"] = "vec"
+        h["vec_score"] = h["score"]
+        hits.append(h)
+    return hits
 
 
 def merge_rrf(
     ranked_lists: list[tuple[str, list[dict]]],
-    limit: int,
+    limit: int | None = None,
     k: int = RRF_K,
 ) -> list[dict]:
-    """Reciprocal-rank fusion. `ranked_lists` is [(origin, hits), ...]."""
+    """Reciprocal-rank fusion. `ranked_lists` is [(origin, hits), ...].
+    `limit=None` fuses (and returns) the whole pool, unsliced."""
     scores: dict[str, float] = {}
     meta: dict[str, dict] = {}
     origins: dict[str, set[str]] = {}
@@ -366,11 +599,13 @@ def merge_rrf(
             if hk and (not pk or len(hk) > len(pk)):
                 merged["key_points"] = hk
             meta[name] = merged
-    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))[: max(limit, 0)]
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+    if limit is not None:
+        ranked = ranked[: max(limit, 0)]
     out = []
     for name, sc in ranked:
         h = dict(meta[name])
-        h["score"] = round(sc, 4)
+        h["score"] = round(sc, 6)
         h["via"] = "+".join(sorted(origins[name]))
         out.append(h)
     return out
@@ -380,51 +615,204 @@ def _pool_size(limit: int) -> int:
     return max(int(limit) * 4, 16)
 
 
-def _demote_inactive(hits: list[dict]) -> list[dict]:
-    """Keep score order, but put superseded/removed Facts after live ones."""
-    live, rest = [], []
-    for h in hits:
-        if h.get("status") in (STATUS_SUPERSEDED, STATUS_REMOVED):
-            rest.append(h)
+# --- Ranking rules, copied verbatim from ai_memory/retrieval.py so the two
+# implementations agree on fixtures (tests/test_retrieval_contract.py). ---
+
+# Trailing time/date suffixes only: "(15:30 EDT)", "(2026-03-10)", "— 2026-08-30", "— 2026-08-30 #2".
+_TRAILING_SUFFIX = re.compile(
+    r"(\s*\([^()]*?(?:\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|UTC|EDT|EST|\bET\b)\s*\)"
+    r"|\s*[—-]\s*\d{4}-\d{2}-\d{2}(?:\s*#\d+)?)\s*$"
+)
+
+
+def strip_time_suffix(name: str) -> str:
+    return _TRAILING_SUFFIX.sub("", name or "").strip()
+
+
+def as_supersedes_multimap(supersedes) -> dict:
+    """Normalise a SUPERSEDES map to the multimap shape ``{new: {old, ...}}``.
+
+    ``_load_supersedes`` returns that shape so a keeper superseding several olds
+    keeps every edge. A legacy ``{new: old}`` mapping is accepted and widened."""
+    out: dict = {}
+    for new, olds in (supersedes or {}).items():
+        bucket = out.setdefault(new, set())
+        if isinstance(olds, str):
+            bucket.add(olds)
         else:
-            live.append(h)
-    return live + rest
+            bucket.update(olds)
+    return out
 
 
-def _collapse_superseded_siblings(hits: list[dict]) -> list[dict]:
-    """Drop a superseded/removed hit when an active sibling of the same topic is already in the list."""
-    live_topics = {
-        h.get("topic")
-        for h in hits
-        if h.get("topic")
-        and h.get("status") not in (STATUS_SUPERSEDED, STATUS_REMOVED)
-    }
-    if not live_topics:
-        return hits
-    return [
+def _chain(name: str, supersedes) -> set:
+    """All names reachable from ``name`` along SUPERSEDES in either direction."""
+    fwd = as_supersedes_multimap(supersedes)
+    inv: dict = {}
+    for new, olds in fwd.items():
+        for old in olds:
+            inv.setdefault(old, []).append(new)
+    seen, todo = set(), [name]
+    while todo:
+        n = todo.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        todo.extend(fwd.get(n, ()))
+        todo.extend(inv.get(n, []))
+    return seen
+
+
+def same_topic(a: dict, b: dict, supersedes: dict | None = None) -> bool:
+    """Spec §3: connected by a SUPERSEDES chain, or same name once the trailing
+    time/date suffix is stripped (compared case-insensitively, like the
+    exact-name boost in ``rank_adjust``)."""
+    an, bn = a.get("name") or "", b.get("name") or ""
+    if an == bn:
+        return True
+    if strip_time_suffix(an).casefold() == strip_time_suffix(bn).casefold():
+        return True
+    if supersedes and bn in _chain(an, supersedes):  # noqa: SIM103 (byte-identical w/ ai_memory/retrieval.py)
+        return True
+    return False
+
+
+# --- Edge-layer rules, copied verbatim from ai_memory/wordindex.py (is_duplicate uses
+# this file's own strip_time_suffix/_chain above rather than an ai_memory import).
+# Parity with the library is asserted by tests/test_retrieval_contract.py. ---
+
+STOP = frozenset([
+    "the", "and", "for", "with", "from", "via", "per", "how", "but", "key", "what", "when", "why", "this", "that",
+    "are", "was", "were", "not", "you", "your", "has", "have",
+    "utc", "edt", "est", "pst", "pdt", "cst", "cdt", "gmt",
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    "nova", "weft", "grok", "claude", "thread", "shared", "ntr"
+])
+SHORT = frozenset({"ai", "ml", "sql", "gpu", "nlp", "rl", "api", "cli", "qa", "etl"})
+EDGE_K = 5
+DUP_COS = 0.95
+TOKEN_CAP = 24
+_TOK = re.compile(r"[a-z0-9]+")
+
+
+def _keep(w: str) -> bool:
+    return w not in STOP and not w.isdigit() and (len(w) >= 3 or w in SHORT)
+
+
+def tokenize(text: str, name: str = "", cap: int = TOKEN_CAP) -> list[str]:
+    cnt = Counter(w for w in _TOK.findall((text or "").lower()) if _keep(w))
+    name_toks = [w for w in dict.fromkeys(_TOK.findall((name or "").lower())) if w in cnt]
+    rest = [w for w, _ in cnt.most_common() if w not in name_toks]
+    return (name_toks + rest)[:cap]
+
+
+def _w(tok: str, idf, default_idf: float) -> float:
+    return idf.get(tok, default_idf)
+
+
+def tfidf_norm(tokens, idf, default_idf: float) -> float:
+    return math.sqrt(sum(_w(t, idf, default_idf) ** 2 for t in set(tokens)))
+
+
+def tfidf_cosine(tokens_a, tokens_b, idf, norm_a: float, norm_b: float, default_idf: float) -> float:
+    if not norm_a or not norm_b:
+        return 0.0
+    shared = set(tokens_a) & set(tokens_b)
+    return sum(_w(t, idf, default_idf) ** 2 for t in shared) / (norm_a * norm_b)
+
+
+def shared_keywords(tokens_a, tokens_b, idf, cap: int = 10) -> list[str]:
+    shared = set(tokens_a) & set(tokens_b)
+    return sorted(shared, key=lambda t: (-idf.get(t, 0.0), t))[:cap]
+
+
+def zscore(v: float, mean: float, std: float) -> float:
+    return (v - mean) / std if std else 0.0
+
+
+def blend(t: float, c: float, base) -> float:
+    return 0.5 * zscore(t, base["t_mean"], base["t_std"]) + 0.5 * zscore(c, base["c_mean"], base["c_std"])
+
+
+def is_duplicate(name_a: str, name_b: str, cos: float, supersedes: dict | None = None) -> bool:
+    """``supersedes`` is the ``{new: {old, ...}}`` multimap from _load_supersedes,
+    so every twin of a keeper is recognised, not just the last edge loaded."""
+    if strip_time_suffix(name_a) == strip_time_suffix(name_b):
+        return True
+    if cos >= DUP_COS:
+        return True
+    return bool(supersedes) and name_b in _chain(name_a, supersedes)
+
+
+def pick(cands, floor: float, k: int = EDGE_K) -> list:
+    ok = [c for c in cands if c[1] >= floor]
+    ok.sort(key=lambda c: (-c[1], c[0]))
+    return ok[:k]
+
+
+def canonical_pair(a: str, b: str) -> tuple[str, str]:
+    return (a, b) if a < b else (b, a)
+
+
+def edges_from_picks(picks) -> dict:
+    out: dict = {}
+    for src, lst in picks.items():
+        for other, b, t, c in lst:
+            key = canonical_pair(src, other)
+            e = out.setdefault(key, {"weight": b, "tfidf": t, "cos": c, "picked_by": []})
+            if src not in e["picked_by"]:
+                e["picked_by"].append(src)
+    for e in out.values():
+        e["picked_by"].sort()
+        e["via"] = "both" if len(e["picked_by"]) == 2 else e["picked_by"][0]
+    return out
+
+
+def _is_active(h: dict) -> bool:
+    return (h.get("status") or "active") not in INACTIVE
+
+
+def rank_adjust(hits: list[dict], query: str, supersedes: dict | None = None) -> list[dict]:
+    """Spec §3 steps 2–4, applied to fused hits (already sorted by (-score, name)).
+
+    1. Drop an inactive hit when an active hit on the same topic is present.
+    2. Active hits before inactive ones, order within each group preserved.
+    3. An active hit whose name equals the query (case-insensitive) moves to the top.
+    """
+    active = [h for h in hits if _is_active(h)]
+    inactive = [
         h for h in hits
-        if not (
-            h.get("status") in (STATUS_SUPERSEDED, STATUS_REMOVED)
-            and h.get("topic") in live_topics
-        )
+        if not _is_active(h) and not any(same_topic(h, a, supersedes) for a in active)
     ]
+    ordered = active + inactive
+    q = (query or "").strip().lower()
+    if q:
+        exact = [h for h in active if (h.get("name") or "").strip().lower() == q]
+        if exact:
+            rest = [h for h in ordered if h not in exact]
+            ordered = exact + rest
+    return ordered
 
 
-def _rank_hits(hits: list[dict]) -> list[dict]:
-    return _collapse_superseded_siblings(_demote_inactive(hits))
+def apply_vector_only_floor(vec_hits: list[dict], lexical_hits: list[dict]) -> list[dict]:
+    """Spec §3 step 5: with no lexical evidence, drop weak vector neighbours."""
+    if lexical_hits:
+        return vec_hits
+    return [h for h in vec_hits if float(h.get("vec_score") or 0.0) >= VECTOR_ONLY_FLOOR]
 
 
 def _fulltext_leg(
     driver, query: str, index: str, limit: int, bolt_timeout: float | None = None,
     extra_indexes: list[str] | None = None,
+    *, assistant: str | None = None, space: str | None = None, trust: str | None = None,
 ) -> list[dict]:
     extras = [x for x in (extra_indexes or []) if x]
+    filt = _leg_filters(assistant, space, trust)
     try:
         with driver.session() as s:
             lists: list[tuple[str, list[dict]]] = []
             try:
                 hits = search_fulltext(
-                    s, query, index, limit, bolt_timeout=bolt_timeout,
+                    s, query, index, limit, bolt_timeout=bolt_timeout, **filt,
                 )
                 if hits:
                     lists.append(("ft", hits))
@@ -433,7 +821,7 @@ def _fulltext_leg(
             for extra in extras:
                 try:
                     hits = search_fulltext(
-                        s, query, extra, limit, bolt_timeout=bolt_timeout,
+                        s, query, extra, limit, bolt_timeout=bolt_timeout, via="kp", **filt,
                     )
                     if hits:
                         lists.append(("kp", hits))
@@ -455,42 +843,73 @@ def _vector_leg(
     limit: int,
     embed_timeout: float | None,
     bolt_timeout: float | None = None,
+    *, assistant: str | None = None, space: str | None = None, trust: str | None = None,
 ) -> tuple[list[dict], bool]:
     emb = ollama_embed(query, cfg, timeout=embed_timeout)
     if not emb:
         return [], False
+    filt = _leg_filters(assistant, space, trust)
     try:
         with driver.session() as s:
             return search_vector(
-                s, emb, cfg["vector"], limit, bolt_timeout=bolt_timeout,
+                s, emb, cfg["vector"], limit, bolt_timeout=bolt_timeout, **filt,
             ), True
-    except _BOLT_FAIL:
+    except (*_BOLT_FAIL, ValueError):
         return [], False
 
 
-def _vector_hits_above_floor(vec: list[dict], limit: int) -> list[dict]:
-    """Keep vector neighbors at/above VECTOR_ONLY_MIN_SCORE. Input is score-desc."""
-    kept: list[dict] = []
-    for h in vec:
-        sc = float(h.get("score") or 0)
-        if sc < VECTOR_ONLY_MIN_SCORE:
-            break
-        row = dict(h)
-        row["score"] = round(sc, 4)
-        kept.append(row)
-        if len(kept) >= limit:
-            break
-    return kept
+def _load_supersedes(session, bolt_timeout: float | None = None) -> dict:
+    """{new_name: {old_name, ...}} for every SUPERSEDES edge — a multimap, so a keeper
+    that supersedes several olds keeps every edge (a plain {new: old} dict would keep
+    only the last row). `{}` on any failure — best-effort, like
+    ai_memory/search.py::load_supersedes (the name-suffix rule still applies)."""
+    out: dict = {}
+    try:
+        rows = session.run(
+            _query(
+                "MATCH (n:Fact)-[:SUPERSEDES]->(o:Fact) RETURN n.name AS n, o.name AS o",
+                bolt_timeout,
+            )
+        )
+        for r in rows:
+            out.setdefault(r["n"], set()).add(r["o"])
+    except Exception:  # noqa: BLE001 — collapse is best-effort; name-suffix rule still applies
+        return {}
+    return out
 
 
-def _finish_hybrid(ft: list[dict], vec: list[dict], vec_ok: bool, limit: int) -> tuple[list[dict], str]:
-    if vec_ok and vec and ft:
-        return merge_rrf([("ft", ft), ("vec", vec)], limit), "hybrid"
-    if vec_ok and vec:
-        return _vector_hits_above_floor(vec, limit), "hybrid"
-    for h in ft[:limit]:
-        h["score"] = round(h["score"], 3)
-    return ft[:limit], "fulltext" if not vec_ok else "hybrid"
+def _supersedes_leg(driver, bolt_timeout: float | None = None) -> dict:
+    """Open its own session and load the SUPERSEDES map. `{}` on any exception, so a
+    slow or failing lookup degrades to no collapsing instead of blocking the caller
+    or propagating (used both as a daemon future in hybrid mode and inline, bounded
+    by bolt_timeout, in the single-leg modes)."""
+    try:
+        with driver.session() as s:
+            return _load_supersedes(s, bolt_timeout)
+    except Exception:  # noqa: BLE001 — best-effort, like _load_supersedes
+        return {}
+
+
+def rank_pipeline(
+    ft: list[dict],
+    vec: list[dict],
+    vec_ok: bool,
+    query: str,
+    supersedes: dict,
+    limit: int,
+) -> tuple[list[dict], str]:
+    """Fuse the whole ft+vec pool (RRF, unsliced), apply the library's ranking
+    rules, then slice to `limit`. Backend is "hybrid" when vec_ok, else "fulltext"."""
+    vec = apply_vector_only_floor(vec, ft) if vec_ok else []
+    # "lex", not "ft": `ft` is the already-fused content+key-points pool, and
+    # merge_rrf recomputes `via` from the origin label. Labelling it "ft" would
+    # tell a key-points-only hit it came from the content index. Same neutral
+    # label as ai_memory/search.py::search_hybrid.
+    legs = [(origin, hits) for origin, hits in (("lex", ft), ("vec", vec)) if hits]
+    fused = merge_rrf(legs)
+    ranked = rank_adjust(fused, query, supersedes)[:limit]
+    backend = "hybrid" if vec_ok else "fulltext"
+    return ranked, backend
 
 
 def search_memories(
@@ -502,6 +921,7 @@ def search_memories(
     embed_timeout: float | None = None,
     bolt_timeout: float | None = None,
     deadline: float | None = None,
+    *, assistant: str | None = None, space: str | None = None, trust: str | None = None,
 ) -> tuple[list[dict], str]:
     """Return (hits, backend). Hybrid runs fulltext and embed+KNN in parallel."""
     mode = (mode or "hybrid").strip().lower()
@@ -509,25 +929,31 @@ def search_memories(
     if not q or limit <= 0:
         return [], mode
     pool = _pool_size(limit)
+    filt = _leg_filters(assistant, space, trust)
 
     kp_idx = cfg.get("fulltext_kp")
     extras = [kp_idx] if kp_idx else None
 
+    # Single-leg modes retrieve at pool width and fuse/rank exactly like hybrid,
+    # just with the other leg empty (ai_memory/search.py::search_hybrid passes the
+    # same `pool` to both legs for every mode); `limit` only slices at the end.
     if mode == "fulltext":
         hits = _fulltext_leg(
-            driver, q, cfg["fulltext"], limit, bolt_timeout, extras,
+            driver, q, cfg["fulltext"], pool, bolt_timeout, extras, **filt,
         )
-        for h in hits:
-            h["score"] = round(h["score"], 3)
-        return _rank_hits(hits), "fulltext"
+        supersedes = _supersedes_leg(driver, bolt_timeout)
+        ranked, _ = rank_pipeline(hits, [], False, q, supersedes, limit)
+        return ranked, "fulltext"
 
     if mode == "vector":
         vec, vec_ok = _vector_leg(
-            driver, q, cfg, limit, embed_timeout, bolt_timeout,
+            driver, q, cfg, pool, embed_timeout, bolt_timeout, **filt,
         )
         if not vec_ok:
             return [], "vector-down"
-        return _rank_hits(_vector_hits_above_floor(vec, limit)), "vector"
+        supersedes = _supersedes_leg(driver, bolt_timeout)
+        ranked, _ = rank_pipeline([], vec, True, q, supersedes, limit)
+        return ranked, "vector"
 
     et = SEARCH_EMBED_TIMEOUT if embed_timeout is None else embed_timeout
     bt = SEARCH_BOLT_TIMEOUT if bolt_timeout is None else bolt_timeout
@@ -536,15 +962,17 @@ def search_memories(
         return [], "fulltext"
 
     fut_ft = _daemon_submit(
-        _fulltext_leg, driver, q, cfg["fulltext"], pool, bolt_timeout, extras,
+        _fulltext_leg, driver, q, cfg["fulltext"], pool, bolt_timeout, extras, **filt,
     )
     fut_vec = _daemon_submit(
-        _vector_leg, driver, q, cfg, pool, embed_timeout, bolt_timeout,
+        _vector_leg, driver, q, cfg, pool, embed_timeout, bolt_timeout, **filt,
     )
-    wait([fut_ft, fut_vec], timeout=budget)
+    fut_sup = _daemon_submit(_supersedes_leg, driver, bolt_timeout)
+    wait([fut_ft, fut_vec, fut_sup], timeout=budget)
     ft: list[dict] = []
     vec: list[dict] = []
     vec_ok = False
+    supersedes: dict = {}
     if fut_ft.done() and not fut_ft.cancelled():
         try:
             ft = fut_ft.result(timeout=0)
@@ -555,8 +983,12 @@ def search_memories(
             vec, vec_ok = fut_vec.result(timeout=0)
         except Exception:
             vec, vec_ok = [], False
-    hits, backend = _finish_hybrid(ft, vec, vec_ok, limit)
-    return _rank_hits(hits), backend
+    if fut_sup.done() and not fut_sup.cancelled():
+        try:
+            supersedes = fut_sup.result(timeout=0)
+        except Exception:  # noqa: BLE001 — collapse is best-effort; {} degrades safely
+            supersedes = {}
+    return rank_pipeline(ft, vec, vec_ok, q, supersedes, limit)
 
 
 def _search_stderr(mode: str, backend: str, hits: list[dict]) -> list[str]:
@@ -595,6 +1027,9 @@ def cmd_search(args: argparse.Namespace) -> int:
             mode=args.mode,
             embed_timeout=cfg["embed_timeout"],
             bolt_timeout=SEARCH_BOLT_TIMEOUT,
+            assistant=args.assistant,
+            space=args.space,
+            trust=args.trust,
         )
     except _BOLT_FAIL as e:
         print(f"search failed: {e}", file=sys.stderr)
@@ -652,14 +1087,6 @@ def cmd_stats(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _set_embedding(session, name: str, embedding: list[float]) -> None:
-    session.run(
-        "MATCH (f:Fact {name: $name}) SET f.embedding = $embedding",
-        name=name,
-        embedding=embedding,
-    )
-
-
 def _require_grok(args: argparse.Namespace) -> int | None:
     assistant = (getattr(args, "assistant", None) or ASSISTANT).strip()
     if assistant == ASSISTANT or getattr(args, "force_assistant", False):
@@ -686,6 +1113,7 @@ SHARED_SPACE = "shared"
 STATUS_ACTIVE = "active"
 STATUS_SUPERSEDED = "superseded"
 STATUS_REMOVED = "removed"
+INACTIVE = (STATUS_SUPERSEDED, STATUS_REMOVED)
 LIBRARY_MINDS = frozenset({"Nova", "Weft"})
 _SHARED_NAME_RE = re.compile(
     r"^Shared — (.+?) — (\d{4}-\d{2}-\d{2})(?: #\d+)?$"
@@ -826,23 +1254,284 @@ def _plan_shared_remove(*, existing, reason: str, writer: str) -> dict:
     }
 
 
-def _set_words(session, name: str, text: str) -> None:
-    words = _words(text)
-    if not words:
-        return
+def _load_edge_config(session) -> dict | None:
+    """Verbatim port of ai_memory.wordindex.load_edge_config: the z-score baselines +
+    edge floor published alongside RetrievalConfig, or None when the edge layer hasn't
+    been built yet (rule_version missing/null)."""
+    rec = session.run(
+        "MATCH (c:RetrievalConfig {id: $id}) "
+        "RETURN c.rule_version AS rule_version, c.edge_floor AS edge_floor, "
+        "c.t_mean AS t_mean, c.t_std AS t_std, c.c_mean AS c_mean, c.c_std AS c_std, "
+        "c.n_facts AS n_facts",
+        id="current",
+    ).single()
+    if rec is None or rec["rule_version"] is None:
+        return None
+    return {
+        "rule_version": int(rec["rule_version"]),
+        "edge_floor": float(rec["edge_floor"]),
+        "t_mean": float(rec["t_mean"]),
+        "t_std": float(rec["t_std"]),
+        "c_mean": float(rec["c_mean"]),
+        "c_std": float(rec["c_std"]),
+        "n_facts": int(rec["n_facts"]),
+    }
+
+
+def _write_fact_tokens(session, name: str, tokens: list[str], norm: float) -> None:
+    """Verbatim port of ai_memory.wordindex.write_fact_tokens: replace one Fact's
+    HAS_WORD edges and tfidf_norm."""
     session.run(
-        """
-        MATCH (f:Fact {name: $name})
-        OPTIONAL MATCH (f)-[old:HAS_WORD]->(:Word)
-        DELETE old
-        WITH DISTINCT f
-        UNWIND $words AS word
-        MERGE (w:Word {text: word})
-        MERGE (f)-[:HAS_WORD]->(w)
-        """,
-        name=name,
-        words=words,
+        "MATCH (f:Fact {name: $name}) "
+        "OPTIONAL MATCH (f)-[old:HAS_WORD]->() "
+        "DELETE old "
+        "WITH f "
+        "SET f.tfidf_norm = $norm "
+        "WITH f "
+        "UNWIND $tokens AS t "
+        "MERGE (w:Word {text: t}) "
+        "MERGE (f)-[:HAS_WORD]->(w)",
+        name=name, tokens=list(tokens), norm=norm,
     )
+
+
+def _write_edges(session, edges: dict, rule_version: int, *, batch: int = 500) -> int:
+    """Verbatim port of ai_memory.wordindex.write_edges."""
+    stmt = (
+        "UNWIND $rows AS r "
+        "MATCH (a:Fact {name: r.a}), (b:Fact {name: r.b}) "
+        "MERGE (a)-[e:RELATED_TO]->(b) "
+        "SET e.weight = r.weight, e.tfidf = r.tfidf, e.cos = r.cos, "
+        "e.shared_keywords = r.shared, e.picked_by = r.picked_by, e.via = r.via, "
+        "e.rule_version = $rv "
+        "REMOVE e.shared_count, e.source "
+        "RETURN count(e) AS n"
+    )
+    items = list(edges.items())
+    written = 0
+    for i in range(0, len(items), batch):
+        rows = [
+            {"a": pair[0], "b": pair[1], "weight": e["weight"], "tfidf": e["tfidf"], "cos": e["cos"],
+             "shared": e.get("shared_keywords", []), "picked_by": e["picked_by"], "via": e["via"]}
+            for pair, e in items[i:i + batch]
+        ]
+        rec = session.run(stmt, rows=rows, rv=rule_version).single()
+        written += int(rec["n"]) if rec else 0
+    return written
+
+
+def _write_tokens(session, name: str, prepared_text: str) -> None:
+    """Replacement for the old _set_words: tokenize `prepared_text` with the same rule
+    the library's nightly rebuild uses (`tokenize`), look up each token's published
+    Word.idf, compute tfidf_norm, then replace the Fact's HAS_WORD edges via
+    _write_fact_tokens. `n_facts` for the IDF default comes from the published edge
+    config when there is one, else a fresh Fact count (this client has no batch vocab
+    of its own outside the graph)."""
+    tokens = tokenize(prepared_text, name)
+    edge_cfg = _load_edge_config(session)
+    if edge_cfg is not None:
+        n_facts = edge_cfg["n_facts"]
+    else:
+        rec = session.run("MATCH (f:Fact) RETURN count(f) AS n").single()
+        n_facts = int(rec["n"]) if rec else 0
+    default_idf = math.log(max(n_facts, 2))
+    idf = {
+        r["text"]: r["idf"]
+        for r in session.run(
+            "MATCH (w:Word) WHERE w.text IN $toks RETURN w.text AS text, w.idf AS idf", toks=tokens,
+        )
+        if r["idf"] is not None
+    }
+    norm = tfidf_norm(tokens, idf, default_idf)
+    _write_fact_tokens(session, name, tokens, norm)
+
+
+def _maintain_edges_for(session, name: str, edge_cfg: dict, *, k: int = EDGE_K, log=None) -> dict:
+    """Verbatim port of ai_memory.wordindex.maintain_edges_for (same statements, same
+    parameter names) -- on-write edge maintenance for one Fact `name` ("X"). Uses this
+    module's own tokenize/tfidf/blend/is_duplicate/pick copies above and the existing
+    _load_supersedes helper instead of an ai_memory.search import. Returns
+    {"picked", "repicked", "deleted", "revoked", "skipped"}."""
+    empty = {"picked": 0, "repicked": 0, "deleted": 0, "revoked": 0}
+    if not edge_cfg:
+        return {**empty, "skipped": "no_config"}
+
+    rec = session.run(
+        "MATCH (f:Fact {name: $n}) "
+        "RETURN f.embedding IS NOT NULL AS has_emb, [(f)-[:HAS_WORD]->(w) | w.text] AS toks, "
+        "f.tfidf_norm AS norm",
+        n=name,
+    ).single()
+    if rec is None:
+        return {**empty, "skipped": "missing"}
+    if not rec["has_emb"]:
+        return {**empty, "skipped": "no_embedding"}
+    toks_x = list(rec["toks"] or [])
+
+    default_idf = math.log(max(edge_cfg["n_facts"], 2))
+
+    idf1 = {
+        r["text"]: r["idf"]
+        for r in session.run(
+            "MATCH (w:Word) WHERE w.text IN $toks RETURN w.text AS text, w.idf AS idf", toks=toks_x,
+        )
+        if r["idf"] is not None
+    }
+    norm_x = tfidf_norm(toks_x, idf1, default_idf)
+    _write_fact_tokens(session, name, toks_x, norm_x)
+
+    # vector.similarity.cosine returns the server's *normalised* similarity (1+cos)/2,
+    # not raw cosine -- de-normalise it here so `cos` lands on the same axis as the
+    # nightly rebuild's raw-cosine baselines (c_mean/c_std) and DUP_COS.
+    rows = [dict(r) for r in session.run(
+        "MATCH (f:Fact {name: $n}) MATCH (g:Fact) WHERE g <> f AND g.embedding IS NOT NULL "
+        "RETURN g.name AS name, 2 * vector.similarity.cosine(f.embedding, g.embedding) - 1 AS cos, "
+        "[(g)-[:HAS_WORD]->(w) | w.text] AS toks, g.tfidf_norm AS norm",
+        n=name,
+    )]
+    toks_by_name = {r["name"]: list(r["toks"] or []) for r in rows}
+
+    union_toks = set(toks_x)
+    for toks in toks_by_name.values():
+        union_toks.update(toks)
+    idf2 = {
+        r["text"]: r["idf"]
+        for r in session.run(
+            "MATCH (w:Word) WHERE w.text IN $toks RETURN w.text AS text, w.idf AS idf",
+            toks=sorted(union_toks),
+        )
+        if r["idf"] is not None
+    }
+
+    supersedes = _load_supersedes(session)
+
+    cands: list[tuple[str, float, float, float]] = []
+    for r in rows:
+        g_name = r["name"]
+        cos = float(r["cos"]) if r["cos"] is not None else 0.0
+        if is_duplicate(name, g_name, cos, supersedes):
+            continue
+        toks_g = toks_by_name[g_name]
+        norm_g = r["norm"]
+        norm_g = float(norm_g) if norm_g is not None else tfidf_norm(toks_g, idf2, default_idf)
+        t = tfidf_cosine(toks_x, toks_g, idf2, norm_x, norm_g, default_idf)
+        b = blend(t, cos, edge_cfg)
+        cands.append((g_name, b, t, cos))
+
+    x_picks = pick(cands, edge_cfg["edge_floor"], k)
+    ok = [c for c in cands if c[1] >= edge_cfg["edge_floor"]]
+
+    # Which of `ok` already have X among their own picks? Those get a weight-only
+    # update below (no eviction, not counted as a re-pick).
+    already_picks_x: set[str] = set()
+    if ok:
+        for r in session.run(
+            "UNWIND $names AS g "
+            "MATCH (x:Fact {name: $n})-[e:RELATED_TO]-(o:Fact {name: g}) "
+            "WHERE g IN coalesce(e.picked_by, []) "
+            "RETURN o.name AS g",
+            n=name, names=[c[0] for c in ok],
+        ):
+            already_picks_x.add(r["g"])
+
+    repicked: list[tuple[str, float, float, float]] = []
+    weight_updates: list[tuple[str, float, float, float]] = []
+    unpicks: list[tuple[str, str]] = []
+    for g_name, b, t, c in ok:
+        if g_name in already_picks_x:
+            weight_updates.append((g_name, b, t, c))
+            continue
+        current = [
+            (r["other"], r["weight"])
+            for r in session.run(
+                "MATCH (g:Fact {name: $g})-[e:RELATED_TO]-(o:Fact) "
+                "WHERE $g IN coalesce(e.picked_by, []) AND o.name <> $n "
+                "RETURN o.name AS other, e.weight AS weight ORDER BY e.weight ASC",
+                g=g_name, n=name,
+            )
+        ]
+        if len(current) < k:
+            repicked.append((g_name, b, t, c))
+        elif b > current[0][1]:
+            repicked.append((g_name, b, t, c))
+            unpicks.append((g_name, current[0][0]))
+
+    edges: dict[tuple[str, str], dict] = {}
+    for g_name, b, t, c in x_picks:
+        pair = canonical_pair(name, g_name)
+        e = edges.setdefault(pair, {
+            "weight": b, "tfidf": t, "cos": c, "picked_by": set(),
+            "shared_keywords": shared_keywords(toks_x, toks_by_name[g_name], idf2),
+        })
+        e["picked_by"].add(name)
+    for g_name, b, t, c in repicked:
+        pair = canonical_pair(name, g_name)
+        e = edges.setdefault(pair, {
+            "weight": b, "tfidf": t, "cos": c, "picked_by": set(),
+            "shared_keywords": shared_keywords(toks_x, toks_by_name[g_name], idf2),
+        })
+        e["picked_by"].add(g_name)
+    for g_name, b, t, c in weight_updates:
+        pair = canonical_pair(name, g_name)
+        e = edges.setdefault(pair, {
+            "weight": b, "tfidf": t, "cos": c, "picked_by": set(),
+            "shared_keywords": shared_keywords(toks_x, toks_by_name[g_name], idf2),
+        })
+        e["weight"], e["tfidf"], e["cos"] = b, t, c
+        e["picked_by"].add(g_name)
+
+    if edges:
+        pairs_param = [{"a": a, "b": b} for a, b in edges]
+        for r in session.run(
+            "UNWIND $pairs AS p "
+            "MATCH (a:Fact {name: p.a})-[e:RELATED_TO]-(b:Fact {name: p.b}) "
+            "RETURN p.a AS a, p.b AS b, coalesce(e.picked_by, []) AS picked_by",
+            pairs=pairs_param,
+        ):
+            pair = (r["a"], r["b"])
+            if pair in edges and r["picked_by"]:
+                edges[pair]["picked_by"].update(r["picked_by"])
+        for e in edges.values():
+            e["picked_by"] = sorted(e["picked_by"])
+            e["via"] = "both" if len(e["picked_by"]) == 2 else e["picked_by"][0]
+        _write_edges(session, edges, edge_cfg["rule_version"])
+
+    deleted = 0
+    for g_name, weakest in unpicks:
+        r = session.run(
+            "MATCH (g:Fact {name: $g})-[e:RELATED_TO]-(o:Fact {name: $weakest}) "
+            "SET e.picked_by = [p IN coalesce(e.picked_by, []) WHERE p <> $g] "
+            "WITH e, size(e.picked_by) AS remaining "
+            "SET e.via = CASE remaining WHEN 2 THEN 'both' WHEN 1 THEN e.picked_by[0] ELSE null END "
+            "WITH e, remaining WHERE remaining = 0 "
+            "DELETE e "
+            "RETURN remaining",
+            g=g_name, weakest=weakest,
+        ).single()
+        if r is not None:
+            deleted += 1
+
+    # Revoke X from any edge it previously picked but no longer does.
+    keep = [g_name for g_name, *_ in x_picks]
+    rrec = session.run(
+        "MATCH (x:Fact {name: $n})-[e:RELATED_TO]-(o:Fact) "
+        "WHERE $n IN coalesce(e.picked_by, []) AND NOT o.name IN $keep "
+        "SET e.picked_by = [p IN coalesce(e.picked_by, []) WHERE p <> $n] "
+        "WITH e, size(e.picked_by) AS remaining "
+        "SET e.via = CASE remaining WHEN 2 THEN 'both' WHEN 1 THEN e.picked_by[0] ELSE null END "
+        "WITH collect(e) AS revoked_edges, collect(CASE WHEN remaining = 0 THEN e END) AS empties "
+        "FOREACH (d IN empties | DELETE d) "
+        "RETURN size(revoked_edges) AS revoked, size(empties) AS deleted",
+        n=name, keep=keep,
+    ).single()
+    revoked = int(rrec["revoked"]) if rrec else 0
+    deleted += int(rrec["deleted"]) if rrec else 0
+
+    result = {"picked": len(x_picks), "repicked": len(repicked), "deleted": deleted,
+              "revoked": revoked, "skipped": None}
+    if log is not None:
+        log(f"maintain_edges_for({name}): {result}")
+    return result
 
 
 def _ensure_shared_indexes(session) -> None:
@@ -888,7 +1577,7 @@ def cmd_write(args: argparse.Namespace) -> int:
     drv, cfg = _driver()
     now = _now()
     embedded = False
-    embed_err = None
+    status = "no_config"
     try:
         with drv.session() as s:
             existing = s.run(
@@ -953,19 +1642,27 @@ def cmd_write(args: argparse.Namespace) -> int:
                     name=name,
                     session_id=session_id,
                 )
-            _set_words(s, name, name + " " + summary + " " + " ".join(points))
+            rc = _load_retrieval_config(s)
+            boilerplate = rc["boilerplate"] if rc else frozenset()
+            row = _read_fact_text(s, name)
+            prepared = (
+                fact_embed_text(row["name"], row["summary"], row["key_points"], row["content"], boilerplate)
+                if row is not None
+                else fact_embed_text(name, summary, points, None, boilerplate)
+            )
+            _write_tokens(s, name, prepared)
             if not args.no_embed:
-                vec = ollama_embed(
-                    _fact_text(name, summary, None, points),
-                    cfg,
-                    timeout=WRITE_EMBED_TIMEOUT,
-                )
-                if vec:
-                    try:
-                        _set_embedding(s, name, vec)
-                        embedded = True
-                    except _BOLT_FAIL as e:
-                        embed_err = e.__class__.__name__
+                try:
+                    status = _embed_fact_cas(s, name, cfg, rc, timeout=WRITE_EMBED_TIMEOUT, row=row)
+                except _BOLT_FAIL:
+                    status = "embed_failed"
+                embedded = status == "embedded"
+            try:
+                edge_cfg = _load_edge_config(s)
+                if edge_cfg is not None:
+                    _maintain_edges_for(s, name, edge_cfg)
+            except Exception as e:  # noqa: BLE001 — edge maintenance must never fail a write
+                print(f"edge maintenance failed for {name!r}: {e}", file=sys.stderr)
     except _BOLT_FAIL as e:
         print(f"write failed: {e}", file=sys.stderr)
         return 1
@@ -973,7 +1670,7 @@ def cmd_write(args: argparse.Namespace) -> int:
         drv.close()
     extra = ""
     if not args.no_embed and not embedded:
-        extra = f" (no embedding: {embed_err or 'ollama down'})"
+        extra = f" (no embedding: {_EMBED_STATUS_MSG.get(status, 'ollama down')})"
     print(f"wrote [{assistant}] {name}{extra}")
     return 0
 
@@ -1004,7 +1701,7 @@ def cmd_write_shared(args: argparse.Namespace) -> int:
     now = _now()
     day = _day(now)
     embedded = False
-    embed_err = None
+    status = "no_config"
     wrote_name = None
     action = None
     try:
@@ -1138,22 +1835,27 @@ def cmd_write_shared(args: argparse.Namespace) -> int:
                         )
                         return 3
                 points = dated_points
-            _set_words(
-                s, wrote_name,
-                wrote_name + " " + (summary or "") + " " + " ".join(points),
+            rc = _load_retrieval_config(s)
+            boilerplate = rc["boilerplate"] if rc else frozenset()
+            row = _read_fact_text(s, wrote_name)
+            prepared = (
+                fact_embed_text(row["name"], row["summary"], row["key_points"], row["content"], boilerplate)
+                if row is not None
+                else fact_embed_text(wrote_name, summary, points, None, boilerplate)
             )
+            _write_tokens(s, wrote_name, prepared)
             if not args.no_embed:
-                vec = ollama_embed(
-                    _fact_text(wrote_name, summary, None, points),
-                    cfg,
-                    timeout=WRITE_EMBED_TIMEOUT,
-                )
-                if vec:
-                    try:
-                        _set_embedding(s, wrote_name, vec)
-                        embedded = True
-                    except _BOLT_FAIL as e:
-                        embed_err = e.__class__.__name__
+                try:
+                    status = _embed_fact_cas(s, wrote_name, cfg, rc, timeout=WRITE_EMBED_TIMEOUT, row=row)
+                except _BOLT_FAIL:
+                    status = "embed_failed"
+                embedded = status == "embedded"
+            try:
+                edge_cfg = _load_edge_config(s)
+                if edge_cfg is not None:
+                    _maintain_edges_for(s, wrote_name, edge_cfg)
+            except Exception as e:  # noqa: BLE001 — edge maintenance must never fail a write
+                print(f"edge maintenance failed for {wrote_name!r}: {e}", file=sys.stderr)
     except _BOLT_FAIL as e:
         print(f"write failed: {e}", file=sys.stderr)
         return 1
@@ -1161,7 +1863,7 @@ def cmd_write_shared(args: argparse.Namespace) -> int:
         drv.close()
     extra = ""
     if not args.no_embed and not embedded:
-        extra = f" (no embedding: {embed_err or 'ollama down'})"
+        extra = f" (no embedding: {_EMBED_STATUS_MSG.get(status, 'ollama down')})"
     print(f"{action} [{assistant}] {wrote_name}{extra}")
     return 0
 
@@ -1262,55 +1964,65 @@ def cmd_history(args: argparse.Namespace) -> int:
 
 
 def cmd_organize(args: argparse.Namespace) -> int:
-    """RELATED_TO among one mind's facts that share >=2 words. Does not touch other minds' edges."""
+    """Run the on-write edge-maintenance rule (_maintain_edges_for, a verbatim port of
+    ai_memory.wordindex.maintain_edges_for) over every one of this mind's Facts. Needs
+    a published edge rule (a RetrievalConfig with rule_version set) -- run the
+    library's `ai-memory nightly` first. Does not touch other minds' edges directly,
+    though a shared RELATED_TO edge may gain/lose this mind from its picked_by."""
     blocked = _require_grok(args)
     if blocked is not None:
         return blocked
     assistant = (args.assistant or ASSISTANT).strip()
     drv, _ = _driver()
+    names: list[str] = []
+    picked = repicked = revoked = deleted = 0
     try:
         with drv.session() as s:
-            rec = s.run(
-                """
-                MATCH (f1:Fact {assistant: $a})-[:HAS_WORD]->(w:Word)<-[:HAS_WORD]-(f2:Fact {assistant: $a})
-                WHERE elementId(f1) < elementId(f2)
-                WITH f1, f2, collect(DISTINCT w.text) AS shared
-                WHERE size(shared) >= 2
-                MERGE (f1)-[r:RELATED_TO]->(f2)
-                SET r.shared_keywords = shared,
-                    r.shared_count = size(shared),
-                    r.source = 'grok-organize'
-                RETURN count(*) AS linked
-                """,
-                a=assistant,
-            ).single()
-            n = rec["linked"] if rec else 0
+            edge_cfg = _load_edge_config(s)
+            if edge_cfg is None:
+                print(
+                    "organize needs a published edge rule (run the library's ai-memory nightly first)",
+                    file=sys.stderr,
+                )
+                return 1
+            names = [
+                r["name"]
+                for r in s.run(
+                    "MATCH (f:Fact {assistant: $a}) RETURN f.name AS name ORDER BY name",
+                    a=assistant,
+                )
+            ]
+            for name in names:
+                result = _maintain_edges_for(s, name, edge_cfg)
+                picked += result["picked"]
+                repicked += result["repicked"]
+                revoked += result["revoked"]
+                deleted += result["deleted"]
     except _BOLT_FAIL as e:
         print(f"organize failed: {e}", file=sys.stderr)
         return 1
     finally:
         drv.close()
-    print(f"linked {n} {assistant} fact pairs")
+    print(f"maintained {len(names)} facts: picked {picked}, repicked {repicked}, revoked {revoked}, deleted {deleted}")
     return 0
 
 
 def cmd_embed(args: argparse.Namespace) -> int:
-    """Backfill Fact.embedding for nodes that lack one. Indexing only — does not rewrite content."""
+    """Backfill Fact.embedding for nodes missing a vector or carrying a foreign one (no
+    embedding_text_sha). Indexing only — does not rewrite content."""
     drv, cfg = _driver()
     try:
         with drv.session() as s:
             rows = s.run(
                 """
                 MATCH (f:Fact)
-                WHERE f.embedding IS NULL
+                WHERE f.embedding IS NULL OR f.embedding_text_sha IS NULL
                 RETURN f.name AS name,
-                       f.summary AS summary,
-                       f.content AS content,
-                       f.key_points AS key_points,
                        coalesce(f.assistant,'(none)') AS assistant
                 ORDER BY f.name
                 """
             ).data()
+            rc = _load_retrieval_config(s)
     except _BOLT_FAIL as e:
         print(f"embed failed: {e}", file=sys.stderr)
         drv.close()
@@ -1331,6 +2043,13 @@ def cmd_embed(args: argparse.Namespace) -> int:
         drv.close()
         print("embedded 0/0 (already complete)")
         return 0
+    if rc is None:
+        drv.close()
+        print(
+            "embed aborted: no RetrievalConfig — run ai-memory embed --all from the library first",
+            file=sys.stderr,
+        )
+        return 1
 
     if not ollama_embed("probe", cfg, timeout=min(WRITE_EMBED_TIMEOUT, 5.0)):
         drv.close()
@@ -1338,6 +2057,7 @@ def cmd_embed(args: argparse.Namespace) -> int:
         return 1
 
     ok = 0
+    cas_skipped = 0
     fail = 0
     skipped = 0
     consecutive = 0
@@ -1345,12 +2065,20 @@ def cmd_embed(args: argparse.Namespace) -> int:
     try:
         with drv.session() as s:
             for i, r in enumerate(rows, 1):
-                text = _fact_text(r["name"], r["summary"], r["content"], r["key_points"])
-                if not text.strip():
+                try:
+                    status = _embed_fact_cas(s, r["name"], cfg, rc, timeout=WRITE_EMBED_TIMEOUT)
+                except _BOLT_FAIL:
+                    status = "embed_failed"
+                if status == "embedded":
+                    ok += 1
+                    consecutive = 0
+                elif status == "cas_skipped":
+                    cas_skipped += 1
+                    consecutive = 0
+                elif status in ("missing", "empty_text"):
                     skipped += 1
-                    continue
-                vec = ollama_embed(text, cfg, timeout=WRITE_EMBED_TIMEOUT)
-                if not vec:
+                    consecutive = 0
+                else:
                     fail += 1
                     consecutive += 1
                     if consecutive >= EMBED_FAIL_ABORT:
@@ -1360,28 +2088,19 @@ def cmd_embed(args: argparse.Namespace) -> int:
                             file=sys.stderr,
                         )
                         break
-                    continue
-                try:
-                    _set_embedding(s, r["name"], vec)
-                    ok += 1
-                    consecutive = 0
-                except _BOLT_FAIL:
-                    fail += 1
-                    consecutive += 1
-                    if consecutive >= EMBED_FAIL_ABORT:
-                        aborted = True
-                        print(
-                            f"embed aborted after {consecutive} consecutive SET failures",
-                            file=sys.stderr,
-                        )
-                        break
                 if i % 20 == 0 or i == len(rows):
-                    print(f"embedded {ok}/{len(rows)} (fail {fail} skip {skipped})", flush=True)
+                    print(
+                        f"embedded {ok}/{len(rows)} (cas_skipped {cas_skipped} fail {fail} skip {skipped})",
+                        flush=True,
+                    )
     finally:
         drv.close()
-    queued = total - ok - fail - skipped
+    queued = total - ok - cas_skipped - fail - skipped
     extra = " aborted" if aborted else ""
-    print(f"done {ok} embedded, {fail} failed, {skipped} skipped, {queued} still queued{extra}")
+    print(
+        f"done {ok} embedded, {cas_skipped} cas_skipped, {fail} failed, {skipped} skipped, "
+        f"{queued} still queued{extra}"
+    )
     return 0 if fail == 0 and not aborted else 1
 
 
@@ -1535,6 +2254,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="hybrid",
         help="hybrid (default), fulltext, or vector-only",
     )
+    s.add_argument("--assistant", default=None, help="filter: exact f.assistant match")
+    s.add_argument("--space", default=None, help="filter: exact f.space match")
+    s.add_argument("--trust", default=None, help="filter: exact f.provenance_trust match")
     s.set_defaults(func=cmd_search)
 
     s = sub.add_parser("stats", help="Graph counts")
@@ -1589,7 +2311,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--topic", required=True)
     s.set_defaults(func=cmd_history)
 
-    s = sub.add_parser("organize", help="RELATED_TO among one mind's facts sharing 2+ words")
+    s = sub.add_parser(
+        "organize",
+        help="Run the published edge rule's on-write maintenance over one mind's facts",
+    )
     s.add_argument("--assistant", default=ASSISTANT)
     s.add_argument(
         "--force-assistant",

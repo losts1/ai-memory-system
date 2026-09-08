@@ -12,6 +12,7 @@ Usage:
     python3 neo4j_sync.py --assistant Weft
     python3 neo4j_sync.py --full --assistant Nova
 """
+from __future__ import annotations  # `X | None` annotations must not evaluate on Python 3.9
 
 import argparse
 import fcntl
@@ -19,8 +20,9 @@ import hashlib
 import json
 import os
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Workspace directory: set AI_MEMORY_DIR env var to override default (~/.ai-memory)
@@ -29,24 +31,22 @@ load_dotenv(_WORKSPACE / ".env.neo4j")
 
 from neo4j import GraphDatabase
 
+from ai_memory.embed import (
+    build_embed_subquery,
+    embed_params,
+    embed_text,
+    fact_embed_text,
+    text_sha,
+)
+from ai_memory.learn import maintain_edges_after_write, owner_blocks_write, refuse_owner_conflict
+from ai_memory.retrieval_config import load_retrieval_config
+from ai_memory.wordindex import tokenize
+
 WORKSPACE = _WORKSPACE
 MEMORY_DIR = WORKSPACE / "memory"
 STATE_FILE = MEMORY_DIR / "neo4j_sync_state.json"
 LOCK_FILE = MEMORY_DIR / ".neo4j_sync.lock"
 FACTS_PER_SESSION = 10
-EMBED_MODEL = "nomic-embed-text"
-
-
-def get_embedding(text: str) -> list | None:
-    """Generate embedding via Ollama. Returns None if Ollama is unavailable."""
-    try:
-        import ollama
-        response = ollama.embeddings(model=EMBED_MODEL, prompt=text[:2000])
-        return response["embedding"]
-    except Exception as e:
-        # Ollama may not be running — degrade gracefully, vector search won't work
-        # until embeddings are backfilled (re-run with --full once Ollama is available)
-        return None
 
 
 def compute_file_hash(filepath: Path) -> str:
@@ -114,6 +114,67 @@ def extract_facts(content: str, source: str) -> list:
     return facts
 
 
+def write_fact_with_embedding(neo4j_session, fact: dict, *, relative_path: str, assistant, cfg, embed_fn=embed_text) -> str:
+    """MERGE the Fact's text, its Word index, and — when possible — its canonical-text
+    embedding in ONE statement. CAS on summary/key_points (owned by other writers);
+    content is ours. Returns "owner_conflict" | "embedded" | "cas_skipped" | "text_only".
+
+    The same read that supplies the CAS values also reads the existing Fact's
+    `assistant`: this MERGE-by-name is an in-place overwrite, so a Fact tagged with
+    another mind is refused ("owner_conflict") and nothing is written. An untagged
+    Fact is library memory this writer may update and claim (`owner_blocks_write`)."""
+    seen = neo4j_session.run(
+        "OPTIONAL MATCH (f:Fact {name: $name}) "
+        "RETURN f.summary AS summary, f.key_points AS key_points, f.assistant AS owner",
+        name=fact["name"],
+    ).single()
+    owner = seen.get("owner") if seen else None
+    if owner_blocks_write(owner, assistant):
+        refuse_owner_conflict(fact["name"], owner, assistant)
+        return "owner_conflict"
+
+    fact_id = hashlib.sha256(f"{relative_path}:{fact['name']}".encode()).hexdigest()[:16]
+    content = fact["content"][:2000]
+    params = {"id": fact_id, "name": fact["name"], "content": content, "source": fact["source"], "session_id": relative_path}
+    fact_set = "SET f.content = $content, f.source = $source, f.id = coalesce(f.id, $id)"
+    if assistant:
+        fact_set += ", f.assistant = $assistant"
+        params["assistant"] = assistant
+
+    summary_seen = seen["summary"] if seen else None
+    kp_seen = seen["key_points"] if seen else None
+    boilerplate = cfg.boilerplate if cfg is not None else ()
+    text = fact_embed_text(fact["name"], summary_seen, kp_seen, content, boilerplate)
+    params["words"] = tokenize(text, fact["name"])
+
+    embed_block, embed_return = "", ""
+    if cfg is not None and embed_fn is not None:
+        vec = embed_fn(text)
+        if vec:
+            embed_block = "WITH f\n" + build_embed_subquery(["summary", "key_points"]) + "\n"
+            embed_return = ", embedded"
+            params.update(embed_params(vec, text_sha(text, cfg.version), cfg.version, cas={"summary": summary_seen, "key_points": kp_seen}))
+    rec = neo4j_session.run(
+        f"""
+        MERGE (f:Fact {{name: $name}})
+        {fact_set}
+        WITH f
+        MATCH (s:Session {{id: $session_id}})
+        MERGE (f)-[:LEARNED_IN]->(s)
+        WITH f
+        OPTIONAL MATCH (f)-[old:HAS_WORD]->(:Word)
+        DELETE old
+        WITH DISTINCT f
+        FOREACH (word IN $words | MERGE (w:Word {{text: word}}) MERGE (f)-[:HAS_WORD]->(w))
+        {embed_block}RETURN f.name AS name{embed_return}
+        """,
+        **params,
+    ).single()
+    if not rec or not embed_return:
+        return "text_only"
+    return "embedded" if rec["embedded"] else "cas_skipped"
+
+
 def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None) -> dict:
     """Sync a single session file to Neo4j.
 
@@ -150,6 +211,14 @@ def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None)
 
     try:
         with driver.session() as neo4j_session:
+            # This writer now MERGEs (:Word {text}) itself (see write_fact_with_embedding);
+            # ensure the uniqueness constraint sync_facts() also creates, so a fresh
+            # deployment synced only by this script can't race into duplicate Word nodes.
+            neo4j_session.run(
+                "CREATE CONSTRAINT word_text_unique IF NOT EXISTS "
+                "FOR (w:Word) REQUIRE w.text IS UNIQUE"
+            )
+
             # Ensure the Assistant node exists if we're tagging data
             if assistant:
                 neo4j_session.run(
@@ -179,54 +248,29 @@ def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None)
                 **session_params,
             )
 
+            try:
+                cfg = load_retrieval_config(neo4j_session)
+            except Exception as e:  # noqa: BLE001
+                print(f"  RetrievalConfig unavailable ({e}); syncing text without embeddings", file=sys.stderr)
+                cfg = None
+
             embedding_failures = 0
+            cas_skipped = 0
+            owner_conflicts = 0
             for fact in synced_facts:
-                # Hash-based ID: no truncation collisions
-                fact_id = hashlib.sha256(
-                    f"{relative_path}:{fact['name']}".encode()
-                ).hexdigest()[:16]
-
-                fact_params = {
-                    "id": fact_id,
-                    "name": fact["name"],
-                    "content": fact["content"][:2000],
-                    "source": fact["source"],
-                    "session_id": relative_path,
-                }
-                # Primary identity is f.name (v1.2). coalesce preserves any id
-                # already set by a prior sync, so the legacy id-based lookups
-                # used by backfill_assistant.py continue to work.
-                fact_set = (
-                    "SET f.content = $content, "
-                    "f.source = $source, "
-                    "f.id = coalesce(f.id, $id)"
-                )
-                if assistant:
-                    fact_set += ", f.assistant = $assistant"
-                    fact_params["assistant"] = assistant
-
-                neo4j_session.run(
-                    f"""
-                    MERGE (f:Fact {{name: $name}})
-                    {fact_set}
-                    WITH f
-                    MATCH (s:Session {{id: $session_id}})
-                    MERGE (f)-[:LEARNED_IN]->(s)
-                    """,
-                    **fact_params,
-                )
-
-                # Generate and store embedding for vector/semantic search
-                embed_text = f"{fact['name']} {fact['content'][:500]}"
-                embedding = get_embedding(embed_text)
-                if embedding:
-                    neo4j_session.run(
-                        "MATCH (f:Fact {name: $name}) SET f.embedding = $embedding",
-                        name=fact["name"],
-                        embedding=embedding,
-                    )
-                else:
+                status = write_fact_with_embedding(neo4j_session, fact, relative_path=relative_path, assistant=assistant, cfg=cfg, embed_fn=embed_text)
+                if status == "owner_conflict":
+                    # Refused: nothing was written, so there is nothing to re-edge either.
+                    owner_conflicts += 1
+                    continue
+                if status == "text_only":
                     embedding_failures += 1
+                elif status == "cas_skipped":
+                    cas_skipped += 1
+                try:
+                    maintain_edges_after_write(neo4j_session, fact["name"])
+                except Exception as e:  # noqa: BLE001 — the nightly rebuild repairs edges; never abort the sync
+                    print(f"  Edge maintenance failed for {fact['name']!r}: {e}", file=sys.stderr)
 
     except Exception as e:
         print(f"  Error syncing {filepath.name}: {e}", file=sys.stderr)
@@ -239,6 +283,8 @@ def sync_file(driver, filepath: Path, state: dict, assistant: str | None = None)
         "facts": len(synced_facts),
         "dropped": dropped,
         "embed_failures": embedding_failures,
+        "cas_skipped": cas_skipped,
+        "owner_conflicts": owner_conflicts,
     }
 
 
@@ -277,6 +323,8 @@ def main(assistant: str | None = None):
 
         session_files = sorted(MEMORY_DIR.glob("*.md"), reverse=True)
         total_embed_failures = 0
+        total_cas_skipped = 0
+        total_owner_conflicts = 0
 
         for filepath in session_files:
             if filepath.name.startswith("."):
@@ -289,6 +337,8 @@ def main(assistant: str | None = None):
                 total_facts += result.get("facts", 0)
                 total_dropped += result.get("dropped", 0)
                 total_embed_failures += result.get("embed_failures", 0)
+                total_cas_skipped += result.get("cas_skipped", 0)
+                total_owner_conflicts += result.get("owner_conflicts", 0)
                 msg = f"  Synced: {filepath.name} ({result['facts']} facts"
                 if result.get("dropped"):
                     msg += f", {result['dropped']} dropped"
@@ -305,8 +355,15 @@ def main(assistant: str | None = None):
             summary += f", {errors} errors (check stderr)"
         if total_dropped:
             summary += f" ({total_dropped} dropped — sessions with >{FACTS_PER_SESSION} facts)"
+        if total_cas_skipped:
+            summary += f" ({total_cas_skipped} embedding CAS-skipped — concurrent edits, not failures)"
+        if total_owner_conflicts:
+            summary += (
+                f"\n{total_owner_conflicts} facts refused — a Fact of that name is tagged with "
+                "another assistant (see stderr); rename them or sync under that mind."
+            )
         if total_embed_failures:
-            summary += f"\nWarning: {total_embed_failures} facts have no embedding — Ollama unavailable. Re-run with --full once Ollama is running."
+            summary += f"\nWarning: {total_embed_failures} facts have no embedding — Ollama or RetrievalConfig unavailable. Run `ai-memory embed --all` once they are."
         print(summary)
 
     finally:

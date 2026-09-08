@@ -11,6 +11,7 @@ load full details on demand.
 
 These patterns are extracted from the advanced private system.
 """
+from __future__ import annotations
 
 from typing import Dict, Any, List, Optional
 
@@ -23,9 +24,9 @@ def apply_metadata_only(result: Dict[str, Any]) -> Dict[str, Any]:
     to decide whether it wants the full fact.
     """
     name = result.get('name', result.get('id', ''))
-    summary = result.get('summary') or ''
-    content = result.get('content') or ''
-    teaser_src = summary or content
+    # Search hits (ai_memory.search._rows_to_hits) carry `teaser`, not
+    # `summary`/`content` (I1) — fall back to those for other result shapes.
+    teaser_src = result.get('summary') or result.get('content') or result.get('teaser') or ''
     teaser = teaser_src[:150]
     if len(teaser_src) > 150:
         teaser = ' '.join(teaser.split()[:-1]) + '...'

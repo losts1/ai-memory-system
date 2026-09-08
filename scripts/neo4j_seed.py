@@ -23,9 +23,49 @@ _WORKSPACE = Path(os.getenv("AI_MEMORY_DIR", str(Path.home() / ".ai-memory")))
 load_dotenv(_WORKSPACE / ".env.neo4j")
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import ClientError
+
+from ai_memory._config import EXPECTED_VECTOR_FILTER_PROPS
+from ai_memory.vector_index import build_create_index_ddl, build_create_index_ddl_plain
 
 # Must match NEO4J_VECTOR_INDEX in hybrid_memory_search.py (default: fact_embeddings)
 VECTOR_INDEX = os.getenv("NEO4J_VECTOR_INDEX", "fact_embeddings")
+
+
+def seed_vector_index_ddl(with_filters: bool = True) -> str:
+    """CREATE VECTOR INDEX ... IF NOT EXISTS ... for VECTOR_INDEX.
+
+    with_filters=True (default): Cypher 25 DDL WITH [filter props] — requires a server
+    that accepts the `CYPHER 25` prefix. with_filters=False: plain Cypher 5 DDL with no
+    WITH clause, for Cypher-5-only servers (in-index filtering unavailable there; the
+    library uses the over-fetch fallback)."""
+    ddl = (build_create_index_ddl(VECTOR_INDEX, EXPECTED_VECTOR_FILTER_PROPS) if with_filters
+           else build_create_index_ddl_plain(VECTOR_INDEX))
+    return ddl.replace(
+        f"CREATE VECTOR INDEX `{VECTOR_INDEX}` ",
+        f"CREATE VECTOR INDEX `{VECTOR_INDEX}` IF NOT EXISTS ",
+        1,
+    )
+
+
+def create_vector_index(session) -> str:
+    """Run the filtered (Cypher 25) vector-index DDL; on a Cypher-5-only server fall
+    back to the plain DDL (no filter properties). Returns "filtered" or "plain"."""
+    try:
+        session.run(seed_vector_index_ddl(with_filters=True))
+        return "filtered"
+    except ClientError as e:
+        msg = str(e)
+        code = getattr(e, "code", "") or ""
+        if "Invalid input 'WITH'" in msg or code.endswith("SyntaxError"):
+            print(
+                "  Note: this server does not accept Cypher 25 filter properties; creating "
+                "the vector index without them (in-index filtering unavailable; the library "
+                "uses the over-fetch fallback)"
+            )
+            session.run(seed_vector_index_ddl(with_filters=False))
+            return "plain"
+        raise
 
 
 def create_schema(driver):
@@ -80,11 +120,7 @@ def create_schema(driver):
         print("Creating vector index...")
 
         try:
-            session.run(
-                f"CREATE VECTOR INDEX {VECTOR_INDEX} IF NOT EXISTS "
-                "FOR (n:Fact) ON (n.embedding) "
-                "OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}"
-            )
+            create_vector_index(session)
             # IF NOT EXISTS silently skips creation when another vector index already
             # exists on the same (label, property) — verify the index is actually there
             result = session.run(
@@ -93,6 +129,18 @@ def create_schema(driver):
             vector_names = [r["name"] for r in result]
             if VECTOR_INDEX in vector_names:
                 print(f"  Vector index '{VECTOR_INDEX}' ready (768-dim cosine)")
+                props_result = session.run(
+                    "SHOW INDEXES YIELD name, type, properties "
+                    "WHERE type = 'VECTOR' AND name = $name RETURN properties",
+                    name=VECTOR_INDEX,
+                )
+                props_rec = props_result.single()
+                live_props = set((props_rec["properties"] if props_rec else None) or [])
+                if set(EXPECTED_VECTOR_FILTER_PROPS) - live_props:
+                    print(
+                        f"  Note: '{VECTOR_INDEX}' exists without filter properties — "
+                        "run: python scripts/neo4j_migrate_vector_filters.py --migrate"
+                    )
             else:
                 print(f"  Note: '{VECTOR_INDEX}' was not created (IF NOT EXISTS skipped it)")
                 if vector_names:
@@ -139,6 +187,26 @@ def create_schema(driver):
         except Exception as e:
             if "already exists" not in str(e).lower():
                 print(f"  Warning: {e}")
+
+        # 5. Key-points full-text index for fact highlights
+        print("Creating key-points full-text index...")
+        try:
+            session.run("""
+                CREATE FULLTEXT INDEX fact_key_points IF NOT EXISTS
+                FOR (n:Fact) ON EACH [n.key_points]
+            """)
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                print(f"  Warning: {e}")
+
+        # 6. Retrieval config singleton (spec §4): version 1 with no boilerplate so writers can
+        #    embed on a fresh install; `ai-memory embed --all` publishes later versions.
+        print("Creating retrieval config...")
+        session.run(
+            "MERGE (c:RetrievalConfig {id: 'current'}) "
+            "ON CREATE SET c.version = 1, c.boilerplate = [], c.updated_at = toString(datetime())"
+        )
+        print("  RetrievalConfig ready")
 
     print("\nSchema created successfully!")
 

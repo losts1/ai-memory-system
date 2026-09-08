@@ -53,7 +53,11 @@ python3 scripts/hybrid_memory_search.py "inventory management" --assistant Weft
 python3 scripts/neo4j_sync.py --assistant Weft
 ```
 
+**Upgrading from 1.3.x?** 1.4.0 changes the search API and needs an ordered graph
+migration — read [UPGRADING.md](./UPGRADING.md) first.
+
 See the full guides:
+- [UPGRADING.md](./UPGRADING.md) — 1.3.3 → 1.4.0: what breaks, and the migration in order
 - [UPGRADE_PLAN.md](./UPGRADE_PLAN.md)
 - [DECISIONS.md](./DECISIONS.md)
 - [docs/SUBMINDS.md](./docs/SUBMINDS.md)
@@ -158,10 +162,14 @@ See [README — Library section](#library-phase-3) and [MIGRATION.md](./MIGRATIO
    NEO4J_PASSWORD=your_password_here
    EOF
 
-   # Create Python venv
+   # Create Python venv and install the package from this checkout.
+   # Every script imports the `ai_memory` package, so requirements.txt alone is
+   # not enough; the editable install (-e) keeps pointing at the checkout, so a
+   # later `git pull` is picked up without reinstalling. `edges` adds numpy for
+   # `ai-memory nightly`; add `rlm` if you use the learner.
    python3 -m venv ~/.ai-memory/neo4j-venv
    source ~/.ai-memory/neo4j-venv/bin/activate
-   pip install -r requirements.txt
+   pip install -e '.[edges]'
 
    # Initialize schema (Neo4j must be running first)
    python3 ~/.ai-memory/scripts/neo4j_seed.py
@@ -199,7 +207,9 @@ ai-memory-system/
 ├── UPGRADE_PLAN.md           # Phased evolution roadmap
 ├── pyproject.toml            # Package definition + `ai-memory` CLI entry point
 ├── CHANGELOG.md              # Version history
-├── MIGRATION.md              # Upgrade guide for existing users
+├── MIGRATION.md              # Upgrade guide for existing users (what changed per version)
+├── UPGRADING.md              # 1.3.3 -> 1.4.0: breaking changes + ordered migration
+├── docs/UPDATING.md          # How to pull a new public version into an existing install
 ├── requirements.txt
 ├── templates/
 │   ├── AGENTS.md             # Behavioral rules template
@@ -235,6 +245,7 @@ ai-memory-system/
 │   ├── neo4j_sync.py                # Sync sessions → knowledge graph
 │   ├── verify_schema.py             # Check live Neo4j schema against expectations
 │   ├── migrate_to_name_keying.py    # One-time migration to name-keyed Facts
+│   ├── neo4j_migrate_vector_filters.py  # Vector index filter-property migration (Phase 3: --preflight/--migrate/--dry-run)
 │   └── rlm/                  # Phase 4 — advanced RLM tools (experimental)
 │       ├── neo4j_traverse.py # Rich graph traversal + parameter tracing
 │       ├── memory_state.py   # Per-session lazy loading state
@@ -342,6 +353,14 @@ ai-memory learn-sync --days 7 --assistant Weft
 ai-memory state --pending --session "weft:main"
 ai-memory sync --assistant Weft    # markdown sessions → Neo4j (--full to re-sync all)
 ai-memory backfill --primary Weft  # multi-mind migration of an existing graph
+ai-memory embed --all              # re-embed every Fact from the canonical text (backfill)
+ai-memory stats                    # vector provenance drift + edge health (isolated Facts, degree)
+ai-memory edges --dry-run          # compute the RELATED_TO edge layer and report; nothing written
+ai-memory nightly                  # re-embed, then rebuild + cut over the edge layer (needs numpy: pip install 'ai-memory-system[edges]')
+                                   # schedule it: examples/systemd/ (user timer, daily 03:30)
+ai-memory eval-edges               # judge a seeded RELATED_TO sample against the edge rubric
+ai-memory duplicates               # owner report: duplicate-Fact groups + suggested keeper; read-only
+ai-memory supersede NEW OLD --apply  # mark OLD superseded by NEW (or --from-file decisions.json)
 ```
 
 This is a thin, consistent wrapper over the individual scripts. All existing flags continue to work.
