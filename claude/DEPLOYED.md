@@ -40,9 +40,9 @@ Never assume the repo is authoritative; `distill.py` was the case where it was n
 
 | date | files | direction | commit | verified by |
 |---|---|---|---|---|
-| 2026-09-08 | `memory_audit.py`, `memory_lint.py`, `memory_watch.py`, `queue_session.sh` | repo → deployment | `246ee74` | old vs new reports byte-identical on the live corpus; watcher stdout and fingerprint identical in isolated runs; `memory_lint.py --selftest` 5/5; resolved `TRADES_GLOB` / `TRADING` / `MEMORY_DIR` unchanged |
-| 2026-09-08 | `distill.py`, `memory_check.py`, `search.py` | deployment → repo (`search.py`'s docstring path scrubbed on the way, then copied back) | `b71c888` | all nine byte-identical afterwards; `memory_check.py` and `search.py --list` run clean from the deployment |
-| 2026-09-08 | `distill.py` | repo → deployment | `ddb9751` | live `--rebuild-index` byte-identical at 144 entries; `memory_check.py` 0 fail / 0 warn |
+| 2026-09-08 | `memory_audit.py`, `memory_lint.py`, `memory_watch.py`, `queue_session.sh` | repo → deployment | `5bc8e52` | old vs new reports byte-identical on the live corpus; watcher stdout and fingerprint identical in isolated runs; `memory_lint.py --selftest` 5/5; resolved `TRADES_GLOB` / `TRADING` / `MEMORY_DIR` unchanged |
+| 2026-09-08 | `distill.py`, `memory_check.py`, `search.py` | deployment → repo (`search.py`'s docstring path scrubbed on the way, then copied back) | `c322d17` | all nine byte-identical afterwards; `memory_check.py` and `search.py --list` run clean from the deployment |
+| 2026-09-08 | `distill.py` | repo → deployment | `4ee767c` | live `--rebuild-index` byte-identical at 144 entries; `memory_check.py` 0 fail / 0 warn |
 
 All nine files matched their `HEAD` blobs at the end of 2026-09-08.
 
