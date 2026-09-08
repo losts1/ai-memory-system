@@ -491,10 +491,26 @@ def rebuild_index() -> None:
 
     # Non-recursive by design: archive/ holds resolved memories and must not be
     # indexed. PLAN-* are design documents that live here for convenience.
-    files = sorted(
+    candidates = sorted(
         f for f in MEMORY_DIR.glob("*.md")
         if f.name not in NON_MEMORY and not f.name.startswith("PLAN-")
     )
+
+    # A dot-prefixed .md that is not in NON_MEMORY is a mistake, not a memory:
+    # every generator that writes one here (audit, lint) is listed there. Path.glob
+    # matches dotfiles, so indexing it produces an entry memory_check.py can never
+    # resolve — its glob.glob does not match dotfiles, so the file is invisible to
+    # it and the entry reads as "index entry points to a missing file" forever.
+    # Measured 2026-09-08: .claude_ai-memory-system-setup.md, a memory saved with a
+    # leading dot, did exactly that. Skip it and say so — a silent skip is how the
+    # name would stay wrong.
+    files = []
+    for f in candidates:
+        if f.name.startswith("."):
+            print(f"[distill] skipped dot-prefixed {f.name} — rename it without the "
+                  "leading dot if it is a memory, add it to NON_MEMORY if it is not")
+            continue
+        files.append(f)
 
     entries = []
     for f in files:
