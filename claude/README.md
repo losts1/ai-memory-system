@@ -41,6 +41,8 @@ harder to create in the first place.
 | `memory_lint.py` | daily 06:05 | no | flags claims that can silently become false |
 | `archive_memory.py` | manual | moves files | retires resolved memories without deleting them |
 | `queue_session.sh` | session end | no | queues transcripts for distillation |
+| `memory_check.py` | manual / on demand | no | structure: the 200-line `MEMORY.md` limit, index↔file integrity, frontmatter drift, wikilinks |
+| `search.py` | manual | embedding cache only | semantic + keyword search over the memory files (Ollama, content-hash cache; keyword-only fallback) |
 
 The loop that closes the original failure:
 
@@ -80,20 +82,21 @@ a timer, so mtime fingerprinting would have fired on nearly every turn.
 
 ## Portability
 
-**These are not generic.** They carry absolute paths from the deployment they
-were taken from:
+**No script now carries an absolute path from the deployment it was taken from.**
+Every one resolves its memory directory relative to its own location
+(`dirname(__file__)`), and the two that reach outside it take an environment
+override:
 
-| script | hardcoded paths |
+| script | what it resolves, and how |
 |---|---|
-| `memory_lint.py` | 0 — resolves relative to its own location (fixture text aside) |
-| `queue_session.sh` | 2 |
-| `memory_audit.py` | 1 |
-| `memory_watch.py` | 1 |
-| `distill.py`, `memory_mark.py`, `archive_memory.py` | 0 — resolve relative to their own location |
+| all Python scripts | memory dir = their own directory (`dirname(__file__)`) |
+| `queue_session.sh` | `MEMORY_DIR` if set, else `$HOME/.claude/projects/<$HOME slugged>/memory` — Claude Code slugs the project dir by replacing `/` with `-` |
+| `memory_audit.py` | `TRADES_GLOB` env, default `~/trading/kraken-maker-*/trades.db` |
+| `memory_watch.py` | `TRADING_DIR` env, default `~/trading` |
 
-`memory_watch.py` and `memory_audit.py` additionally probe a specific trading
-fleet (`~/trading`, `kraken-maker-*` systemd units). Treat those as
-worked examples of *what* to fingerprint, not as reusable code.
+`memory_watch.py` and `memory_audit.py` still probe a specific trading fleet
+(`kraken-maker-*` systemd units, per-bot `trades.db`). Treat those as worked
+examples of *what* to fingerprint, not as reusable code.
 
 ## Verification
 

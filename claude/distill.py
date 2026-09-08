@@ -35,10 +35,19 @@ LOCK_FILE       = MEMORY_DIR / ".distilling"
 MAX_RETRIES = 3
 
 # Files that live here but are not memories.
+#
+# Enumeration below uses Path.glob("*.md"), which DOES match dotfiles — so generated
+# dot-reports must be listed here explicitly or they get indexed as memories.
+# memory_check.py uses glob.glob("*.md"), which does NOT match dotfiles, so anything
+# missed here shows up there as a phantom "index entry points to a missing file"
+# (the file exists; that checker just cannot see it). .memory_lint_report.md was
+# missed when the lint script was added and produced exactly that false positive.
 NON_MEMORY = {
     "MEMORY.md", "README.md", "IMPLEMENT-MEMORY-SYSTEM.md",
     "search.py", "distill.py", "queue_session.sh",
     "memory_audit.py", ".memory_audit_report.md",
+    "memory_check.py", ".memory_lint_report.md",
+    "PLAN-2026-08-13-memory-freshness.md",
 }
 
 # Max conversation chars sent to distillation prompt (~12k tokens).
@@ -376,11 +385,25 @@ _TYPE_TAG = {
     "reference": "[R]",
 }
 
-# MEMORY.md is auto-loaded into every session and truncated past ~24.4KB, so the
-# index hook is capped here. Full description stays in the memory file; the index
-# is only a pointer. Cap chosen to keep the whole index under budget at ~145 files
-# (was 85 at ~130 files; lowered 2026-07-13 when 140 files overflowed the budget).
-INDEX_HOOK_MAX = 42  # lowered 55→42 on 2026-08-04: reclaim durable margin under the 24.4KB auto-load cap; titles dominate line length, pruning resolved memories remains the long-term fix.
+# MEMORY.md is auto-loaded into every session and truncated at 200 LINES — not at a
+# byte size. Measured 2026-08-15 against claude-code 2.1.220 by loading a synthetic
+# index through the `autoMemoryDirectory` setting: a 260-line / 1838-byte MEMORY.md
+# arrived cut at exactly line 200, with NO truncation marker in context. The same run
+# proves the byte path is irrelevant here — a real 14975-byte index loads complete.
+#
+# CORRECTION: the "~24.4KB auto-load cap" this block used to cite does not exist for
+# this file, so neither this cap nor the 2026-07-13 / 2026-08-04 reductions below ever
+# bought a single line of headroom. One memory is one index line, so the ONLY thing
+# that creates headroom is FEWER MEMORY FILES — merging or pruning. Shortening hooks
+# cannot help. Do not lower INDEX_HOOK_MAX again hoping to reclaim margin.
+#
+# The cap is still worth keeping for what it actually does: holding index lines short
+# enough to stay readable and cheap in context. Full description stays in the memory
+# file; the index is only a pointer.
+#
+# The real limit is enforced by memory_check.py (LINE_LIMIT=200, warn at 170); see
+# reference_memory_system.md for the measurement.
+INDEX_HOOK_MAX = 42  # readability/context-cost cap only — NOT a truncation guard (see above)
 
 
 def _index_hook(description: str) -> str:
@@ -511,11 +534,16 @@ def rebuild_index() -> None:
                      else datetime.date.fromtimestamp(f.stat().st_mtime))
             date_suffix = f" ({mdate})"
 
-        # MEMORY.md is a POINTER index, not a summary. Measured 2026-08-13: the
-        # description hook was 31% of the file's bytes (6,331 of 19,870) and pushed
-        # it to 91% of the 24.4KB auto-load cap. Dropping it returns the file to
-        # ~65% and saves ~1,580 tokens of EVERY session's context. Nothing is lost —
-        # the description still lives in each memory's frontmatter, one Read away.
+        # MEMORY.md is a POINTER index, not a summary. Dropping the description hook
+        # saves ~1,580 tokens of EVERY session's context, and nothing is lost — the
+        # description still lives in each memory's frontmatter, one Read away. That
+        # context saving is the whole justification and it still stands.
+        #
+        # The original 2026-08-13 rationale also claimed the hook "pushed the file to
+        # 91% of the 24.4KB auto-load cap". That cap does not exist for this file
+        # (measured 2026-08-15 — truncation is at 200 LINES, bytes are not checked),
+        # so the byte-percentage half of the argument was never load-bearing. Keep the
+        # change for the token cost; do not cite a byte cap to justify further trims.
         line = f"- {tag} [{name}]({f.name}){date_suffix}{_stale_marker(content)}"
         entries.append(line)
 
