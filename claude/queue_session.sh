@@ -11,7 +11,8 @@
 # (Claude Code sets this when a session is itself running inside a hook),
 # we exit immediately to avoid infinite distillation loops.
 
-MEMORY_DIR="/home/lost/.claude/projects/-home-lost/memory"
+# Claude Code slugs the project directory by replacing "/" with "-".
+MEMORY_DIR="${MEMORY_DIR:-$HOME/.claude/projects/$(printf %s "$HOME" | tr / -)/memory}"
 QUEUE_FILE="$MEMORY_DIR/.distill_queue"
 PROCESSED_FILE="$MEMORY_DIR/.distill_processed"
 LOG_FILE="$MEMORY_DIR/.queue.log"
@@ -48,7 +49,7 @@ fi
 # Prefer the path Claude Code gave us; fall back to the most recently modified
 # JSONL in the projects directory.
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
-    TRANSCRIPT_PATH=$(ls -t /home/lost/.claude/projects/*/*.jsonl 2>/dev/null | head -1)
+    TRANSCRIPT_PATH=$(ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null | head -1)
 fi
 
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then

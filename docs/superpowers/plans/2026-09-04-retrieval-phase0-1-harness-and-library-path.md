@@ -244,7 +244,7 @@ def same_topic(a: dict, b: dict, supersedes: Optional[Dict[str, str]] = None) ->
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_retrieval.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory/retrieval.py tests/test_retrieval.py`
+Run: `venv/bin/python -m pytest tests/test_retrieval.py -q -p no:cacheprovider && ruff check ai_memory/retrieval.py tests/test_retrieval.py`
 Expected: all pass; ruff clean.
 
 - [ ] **Step 5: Commit**
@@ -358,7 +358,7 @@ def apply_vector_only_floor(vec_hits: List[dict], lexical_hits: List[dict]) -> L
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_retrieval.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory/retrieval.py tests/test_retrieval.py`
+Run: `venv/bin/python -m pytest tests/test_retrieval.py -q -p no:cacheprovider && ruff check ai_memory/retrieval.py tests/test_retrieval.py`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -486,7 +486,7 @@ def build_fulltext_cypher(where: str) -> str:
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_retrieval.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory/retrieval.py tests/test_retrieval.py`
+Run: `venv/bin/python -m pytest tests/test_retrieval.py -q -p no:cacheprovider && ruff check ai_memory/retrieval.py tests/test_retrieval.py`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -801,7 +801,7 @@ Then update the two existing tests in `tests/test_library.py` that inspect `sess
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_search_path.py tests/test_library.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory/search.py tests/test_search_path.py`
+Run: `venv/bin/python -m pytest tests/test_search_path.py tests/test_library.py -q -p no:cacheprovider && ruff check ai_memory/search.py tests/test_search_path.py`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -933,7 +933,7 @@ Update `tests/test_library.py` `test_search_graph_cypher_uses_related_to_or_lear
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_search_path.py tests/test_library.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory/search.py`
+Run: `venv/bin/python -m pytest tests/test_search_path.py tests/test_library.py -q -p no:cacheprovider && ruff check ai_memory/search.py`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1120,7 +1120,7 @@ Replace the body of `MemoryClient.search` in `ai_memory/__init__.py` (keep the d
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory tests`
+Run: `venv/bin/python -m pytest tests -q -p no:cacheprovider && ruff check ai_memory tests`
 Expected: all pass (fix any `test_library.py` test that asserted the old `graph_results` merge; it now asserts delegation as above).
 
 - [ ] **Step 5: Commit**
@@ -1243,7 +1243,7 @@ and in `cmd_search` forward them:
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_cli_smoke.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check scripts/cli.py scripts/hybrid_memory_search.py`
+Run: `venv/bin/python -m pytest tests/test_cli_smoke.py -q -p no:cacheprovider && ruff check scripts/cli.py scripts/hybrid_memory_search.py`
 Expected: all pass (including the existing `format_output` tests — `format_output` must accept hits without `related_facts`; it already tolerates missing `source`).
 
 - [ ] **Step 5: Commit**
@@ -1322,7 +1322,7 @@ and in `validate_schema`, after the `fact_content` fulltext loop, repeat the sam
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory scripts/verify_schema.py scripts/neo4j_seed.py`
+Run: `venv/bin/python -m pytest tests -q -p no:cacheprovider && ruff check ai_memory scripts/verify_schema.py scripts/neo4j_seed.py`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1377,7 +1377,7 @@ with `from neo4j.exceptions import TransientError` added to the imports.
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_learn.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory/learn.py`
+Run: `venv/bin/python -m pytest tests/test_learn.py -q -p no:cacheprovider && ruff check ai_memory/learn.py`
 Expected: pass.
 
 - [ ] **Step 5: Commit**
@@ -1642,7 +1642,7 @@ def format_table(results: dict) -> str:
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests/test_harness.py -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory/eval/harness.py tests/test_harness.py`
+Run: `venv/bin/python -m pytest tests/test_harness.py -q -p no:cacheprovider && ruff check ai_memory/eval/harness.py tests/test_harness.py`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1664,7 +1664,7 @@ git commit -m "feat(eval): retrieval harness — golden loader, three rankers, p
 **Interfaces:**
 - Produces:
   - `pool_candidates(queries: List[dict], rankers: Dict[str, Ranker], n=10) -> List[dict]` — for each `{query, filters}` returns `{"query", "filters", "expect": [], "candidates": [{"name","teaser","assistant","status","seen_in":[ranker names]}]}`; the owner deletes non-answers and moves names into `expect`.
-  - `main(argv=None) -> int` — args: `--golden PATH` (default env), `--rankers a,b` (default `legacy,hybrid_fallback,hybrid_search`), `--judge-url` (default `http://192.168.99.235:8080/v1/chat/completions`), `--judge-model` (default `qwen3.8-27b-q6k`), `--cache PATH` (default `~/.ai-memory/judge_cache.json`), `--label` (write skeleton to stdout instead of evaluating), `--json PATH` (write results), `--k 5`, `--pool 10`. Exit 0; exit 2 on golden errors.
+  - `main(argv=None) -> int` — args: `--golden PATH` (default env), `--rankers a,b` (default `legacy,hybrid_fallback,hybrid_search`), `--judge-url` (default `http://localhost:8080/v1/chat/completions`), `--judge-model` (default `qwen3.8-27b-q6k`), `--cache PATH` (default `~/.ai-memory/judge_cache.json`), `--label` (write skeleton to stdout instead of evaluating), `--json PATH` (write results), `--k 5`, `--pool 10`. Exit 0; exit 2 on golden errors.
   - `ai-memory eval …` forwards all of the above to `python -m ai_memory.eval.harness` via the existing `_run_script`-style subprocess? No — `scripts/cli.py` dispatches scripts by path; add `cmd_eval` that calls `harness.main(argv)` directly (it is importable after `pip install -e .`).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1734,7 +1734,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="ai-memory eval", description="Retrieval evaluation against a golden set (spec §8)")
     ap.add_argument("--golden", default=os.getenv(GOLDEN_ENV), help=f"golden JSON path (default ${GOLDEN_ENV})")
     ap.add_argument("--rankers", default="legacy,hybrid_fallback,hybrid_search")
-    ap.add_argument("--judge-url", default="http://192.168.99.235:8080/v1/chat/completions")
+    ap.add_argument("--judge-url", default="http://localhost:8080/v1/chat/completions")
     ap.add_argument("--judge-model", default="qwen3.8-27b-q6k")
     ap.add_argument("--cache", default=str(Path.home() / ".ai-memory" / "judge_cache.json"))
     ap.add_argument("--label", action="store_true", help="print a labelling skeleton (pooled candidates) instead of evaluating")
@@ -1794,7 +1794,7 @@ Because `--help` on the `eval` subparser must show `--golden`, `--rankers`, `--l
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `venv/bin/python -m pytest tests -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory scripts/cli.py tests`
+Run: `venv/bin/python -m pytest tests -q -p no:cacheprovider && ruff check ai_memory scripts/cli.py tests`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1814,7 +1814,7 @@ git commit -m "feat(eval): labelling skeleton and ai-memory eval command"
 - [ ] **Step 1: Run the 3.9 import matrix** (uv is installed; the venv from the audit may still exist)
 
 ```bash
-/home/lost/.local/bin/uv venv -q --python 3.9 /tmp/venv39 && /home/lost/.local/bin/uv pip install -q --python /tmp/venv39/bin/python 'neo4j>=5.0' 'python-dotenv>=1.0' pytest
+uv venv -q --python 3.9 /tmp/venv39 && uv pip install -q --python /tmp/venv39/bin/python 'neo4j>=5.0' 'python-dotenv>=1.0' pytest
 for m in ai_memory ai_memory.retrieval ai_memory.search ai_memory.eval.harness; do /tmp/venv39/bin/python -c "import $m; print('$m OK')"; done
 /tmp/venv39/bin/python -m pytest tests -q -p no:cacheprovider 2>&1 | tail -1
 ```
@@ -1826,7 +1826,7 @@ Expected: four `OK` lines; the pytest line shows only the pre-existing `scripts/
 - [ ] **Step 3: Full suite, ruff, commit, push**
 
 ```bash
-venv/bin/python -m pytest tests -q -p no:cacheprovider && /home/lost/.local/bin/ruff check ai_memory tests scripts/cli.py scripts/hybrid_memory_search.py
+venv/bin/python -m pytest tests -q -p no:cacheprovider && ruff check ai_memory tests scripts/cli.py scripts/hybrid_memory_search.py
 git add CHANGELOG.md
 git commit -m "docs(changelog): phase 0-1 retrieval path and harness"
 git push origin master
@@ -1839,21 +1839,21 @@ git push origin master
 - [ ] **Step 1: Produce the labelling skeleton against the live graph** (read-only)
 
 ```bash
-cd /home/lost/ai-memory-system
+cd ~/ai-memory-system
 cat > /tmp/queries.json <<'EOF'
 [ {"query": "<owner writes ~30 queries here>", "filters": {}, "expect": []} ]
 EOF
-AI_MEMORY_DIR=/home/lost/.grok venv/bin/python -m ai_memory.eval.harness --golden /tmp/queries.json --label --rankers legacy,hybrid_fallback > /tmp/golden_skeleton.json
+AI_MEMORY_DIR=~/.grok venv/bin/python -m ai_memory.eval.harness --golden /tmp/queries.json --label --rankers legacy,hybrid_fallback > /tmp/golden_skeleton.json
 ```
 
-The `.env.neo4j` under `/home/lost/.grok` supplies credentials via `AI_MEMORY_DIR`. `hybrid_search` is omitted here on purpose: before phase 3 it raises 22ND3 on the un-migrated index; include it only after the migration (or use the offline simulation from the spec's scratchpad if SEARCH-only hits must be labelled earlier).
+The `.env.neo4j` under `~/.grok` supplies credentials via `AI_MEMORY_DIR`. `hybrid_search` is omitted here on purpose: before phase 3 it raises 22ND3 on the un-migrated index; include it only after the migration (or use the offline simulation from the spec's scratchpad if SEARCH-only hits must be labelled earlier).
 
-- [ ] **Step 2: Owner labels** — for each query, move the correct `candidates[].name` values into `expect`, delete `candidates`, save as the golden file **outside the repo**, e.g. `/home/lost/.ai-memory/golden/retrieval-2026-09.json`, and `export AI_MEMORY_GOLDEN=/home/lost/.ai-memory/golden/retrieval-2026-09.json`. Mix: ~10 unscoped, ~10 with `filters.assistant` or `filters.space`, 5 with one clear answer, 5 with `expect: []`.
+- [ ] **Step 2: Owner labels** — for each query, move the correct `candidates[].name` values into `expect`, delete `candidates`, save as the golden file **outside the repo**, e.g. `~/.ai-memory/golden/retrieval-2026-09.json`, and `export AI_MEMORY_GOLDEN=~/.ai-memory/golden/retrieval-2026-09.json`. Mix: ~10 unscoped, ~10 with `filters.assistant` or `filters.space`, 5 with one clear answer, 5 with `expect: []`.
 
 - [ ] **Step 3: Baseline** (phase 0 gate)
 
 ```bash
-AI_MEMORY_DIR=/home/lost/.grok venv/bin/python -m ai_memory.eval.harness --rankers legacy,hybrid_fallback --json /home/lost/.ai-memory/golden/baseline-phase0.json
+AI_MEMORY_DIR=~/.grok venv/bin/python -m ai_memory.eval.harness --rankers legacy,hybrid_fallback --json ~/.ai-memory/golden/baseline-phase0.json
 ```
 
 Record the table in the phase-2 plan's preamble. Expected shape: the `legacy` row shows lower `exact5` on scoped queries than `hybrid_fallback`.
@@ -1864,7 +1864,7 @@ Record the table in the phase-2 plan's preamble. Expected shape: the `legacy` ro
 venv/bin/python - <<'EOF'
 import json
 from ai_memory.eval.harness import gate
-b = json.load(open("/home/lost/.ai-memory/golden/baseline-phase0.json"))
+b = json.load(open("~/.ai-memory/golden/baseline-phase0.json"))
 print("phase-1 gate (hybrid_fallback vs legacy):", gate({"per_ranker": {"x": b["per_ranker"]["legacy"]}}, {"per_ranker": {"x": b["per_ranker"]["hybrid_fallback"]}}, "x"))
 EOF
 ```

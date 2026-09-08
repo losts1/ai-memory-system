@@ -22,7 +22,9 @@ from datetime import datetime, timezone
 
 MEMORY_DIR = os.path.dirname(os.path.abspath(__file__))
 REPORT = os.path.join(MEMORY_DIR, ".memory_audit_report.md")
-TRADES_GLOB = "/home/lost/trading/kraken-maker-*/trades.db"
+TRADES_GLOB = os.environ.get(
+    "TRADES_GLOB", os.path.expanduser("~/trading/kraken-maker-*/trades.db")
+)
 
 # Default staleness TTL by volatility (days); per-file `ttl_days:` overrides.
 DEFAULT_TTL = {"high": 3, "medium": 7, "low": 30}

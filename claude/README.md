@@ -92,7 +92,7 @@ were taken from:
 | `distill.py`, `memory_mark.py`, `archive_memory.py` | 0 — resolve relative to their own location |
 
 `memory_watch.py` and `memory_audit.py` additionally probe a specific trading
-fleet (`/home/lost/trading`, `kraken-maker-*` systemd units). Treat those as
+fleet (`~/trading`, `kraken-maker-*` systemd units). Treat those as
 worked examples of *what* to fingerprint, not as reusable code.
 
 ## Verification

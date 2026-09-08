@@ -74,9 +74,9 @@ STAMP_DATE = re.compile(r"\d{4}-\d\d-\d\d")
 # Pointer rot: a memory naming a path that no longer exists. This is its OWN
 # class, deliberately checked even for `reference` memories — pointers are
 # exactly what reference memories carry, and paths move. Found 2026-08-13:
-# reference_ai_memory_repo named /home/lost/.openclaw/workspace as the clone of
+# reference_ai_memory_repo named ~/.openclaw/workspace as the clone of
 # ai-memory-system (it is Nova2.0), and feedback_dashboard_path asserts a git
-# repo at /home/lost/.git which does not exist.
+# repo at ~/.git which does not exist.
 PATHISH = re.compile(r"(?<![\w-])(/home/[a-z]+/[A-Za-z0-9_./-]{3,}|~/[A-Za-z0-9_./-]{3,})")
 # Skip anything templated or globbed — those are patterns, not paths.
 PLACEHOLDER = re.compile(r"[*?<>{}]|\b(PAIR|BASE|NAME|slug)\b")
@@ -123,7 +123,7 @@ def dead_paths(text):
         if _os.path.exists(_os.path.expanduser(cand)):
             continue
         # A path can be named precisely BECAUSE it should not exist: "NOT the
-        # /home/lost/... copy", "there used to be a decoy at ...", "likely stale
+        # ~/... copy", "there used to be a decoy at ...", "likely stale
         # or orphaned". Those memories are correct and its absence confirms them.
         # Verified 2026-08-13: 5 of 9 remaining findings were this shape.
         for m in re.finditer(re.escape(cand), text):
@@ -192,7 +192,7 @@ metadata:
   type: project
 ---
 
-As of 2026-08-04, local master in /home/lost/trading has diverged significantly from origin/master (losts1/trading-bots).
+As of 2026-08-04, local master in ~/trading has diverged significantly from origin/master (losts1/trading-bots).
 **Current state:**
 - Origin/master: 80 commits ahead, contains real production code
 - Local master: 15 unpushed local-only commits
@@ -206,7 +206,7 @@ metadata:
 ---
 
 On 2026-08-04T09:12:44Z, origin was 80 commits ahead and local held 15 unpushed commits.
-Re-derive before acting: `git -C /home/lost/trading rev-list --left-right --count origin/master...HEAD`
+Re-derive before acting: `git -C ~/trading rev-list --left-right --count origin/master...HEAD`
 """
 
 

@@ -54,7 +54,7 @@ import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 FINGERPRINT = os.path.join(HERE, ".state_fingerprint")
 CHANGES = os.path.join(HERE, ".state_changes")
-TRADING = "/home/lost/trading"
+TRADING = os.environ.get("TRADING_DIR", os.path.expanduser("~/trading"))
 
 # Config keys a human or a deploy changes. Deliberately excludes order_size_usd
 # (USDManager) and buy_pad_bps/sell_pad_bps (inventory monitor) — those are

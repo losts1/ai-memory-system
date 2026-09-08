@@ -93,7 +93,7 @@ metadata:
   observed: 2026-08-13T14:30:00Z     # when the claim was checked true
   decay: event                        # never | event | slow | fast | live
   trigger: git-push                   # required when decay: event
-  recheck: git -C /home/lost/trading rev-list --left-right --count origin/master...HEAD
+  recheck: git -C ~/trading rev-list --left-right --count origin/master...HEAD
 ```
 
 | class | semantics | flagged when |
@@ -245,7 +245,7 @@ are written, and it costs one line per memory.
   before doing so.
 - **`subsystem changed` ≠ `this memory is wrong`.** A push does not invalidate every
   git-related memory. The mapping is keyword-based and will drift.
-- **The memory directory is not version controlled** (`/home/lost` is not a git repo), so
+- **The memory directory is not version controlled** (the home directory is not a git repo), so
   these changes have no history and no rollback beyond manual backups.
 
 ## 10. What is deliberately not being built
