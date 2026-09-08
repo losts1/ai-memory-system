@@ -18,6 +18,10 @@ This file tracks the key scoping and architectural decisions for the upgrade/gen
 
 **Follow-up (explicit todo):** Build a private repo later for the full production system. This is recorded as a future task.
 
+**Status (2026-09-08):** Done — the private repository was created 2026-09-04 and is where
+development happens; releases are published here. Option A still holds: this repo carries no
+private content.
+
 **Recorded by:** Weft per user direction.
 
 ---
@@ -107,6 +111,9 @@ Once the above are settled:
 ## Future Todo Items Captured in Phase 0
 
 - **Private advanced memory repo**: Create a separate private repository for the full production system (heavy RLM code, trading-specific learners, memory-v2, internal Nova tooling, etc.). The public `ai-memory-system` repo will remain the clean redistribution/bootstrap experience only.
+  *(Done 2026-09-04. In practice the split landed differently: the engine is published — 1.4.0
+  brought hybrid retrieval, the edge layer and the eval harness here — and what stays private
+  is unreleased work plus the author's own memory content.)*
 
 *Log maintained by Weft during Phase 0 sessions.*
 

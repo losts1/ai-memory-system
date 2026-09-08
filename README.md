@@ -10,7 +10,13 @@ Note that one optional layer (local FAISS embeddings) requires manual index buil
 
 This repository contains the **public redistribution package** — the clean bootstrap experience you can give to a new AI agent.
 
-**Important:** This is the public starter kit. The full production system (deeper RLM features, advanced tooling, heavy domain-specific work) lives in a private environment. See [UPGRADE_PLAN.md](./UPGRADE_PLAN.md) for the full picture.
+**Current release: v1.4.0.** Development happens in a private repository and lands here as
+releases. The engine is not held back: hybrid retrieval, canonical embeddings with
+provenance, in-index vector filters, the `RELATED_TO` edge layer, the duplicate report and
+the eval harness all shipped in 1.4.0. Anything newer than the latest tag is still private,
+as is the author's own memory content and deployment wiring.
+[UPGRADE_PLAN.md](./UPGRADE_PLAN.md) is the 2026-05 plan that got the package here — history,
+not roadmap.
 
 Agent-harness wiring (not the core library):
 
@@ -27,6 +33,13 @@ Agent-harness wiring (not the core library):
 - **Phase 5** (Reduce Domain Coupling): **Complete** — `examples/` directory added with research, software engineering, personal, and (explicitly labeled) trading starters. See [examples/README.md](examples/README.md)
 - **Phase 6** (Unified CLI): **Complete**
 - **Phase 7** (Release & Communication): **Complete**
+
+Those seven phases are the 2026-05 generification plan. The retrieval redesign came after
+them and shipped as **1.4.0 (2026-09-08)**: hybrid search as the default path, canonical
+embedding text with provenance and CAS writes, in-index vector filters, the word-index /
+z-blend `RELATED_TO` edge layer with a nightly cutover, the duplicate + supersede report,
+and the eval harness. It is a breaking change for API callers — read
+[UPGRADING.md](./UPGRADING.md) before upgrading an existing install.
 
 **Phase 2 highlights:**
 - `Assistant` nodes + `assistant` property on Fact/Session/Event nodes
@@ -68,7 +81,10 @@ See the full guides:
 - `MemoryClient` facade: `client.search()`, `client.traverse()`, `client.trace_parameter()`, `client.state()`
 - All search/graph/state logic importable without copying scripts
 - Scripts remain as standalone CLI entry points (no breaking changes)
-- 35 tests covering library + CLI smoke tests (suite has since grown to 151 across `tests/`)
+- 35 tests covering library + CLI smoke tests (suite has since grown to 631 across `tests/`).
+  Run them from a checkout where the package is installed (`pip install -e '.[edges]'`) — the
+  CLI smoke tests spawn `scripts/cli.py` as a subprocess, which cannot import `ai_memory`
+  otherwise, and 19 of them fail with a confusing `ModuleNotFoundError`.
 
 **Phase 4 highlights:**
 - `ai_memory/learn.py` — full learn pipeline as importable library (`parse_learned_topics`, `sync_facts`, `rebuild_graph`)
@@ -231,7 +247,14 @@ ai-memory-system/
 │   ├── __init__.py           # MemoryClient facade + all re-exports
 │   ├── _config.py            # get_workspace, get_driver, validate_schema, get_query_timeout
 │   ├── metadata.py           # apply_metadata_only, apply_fields_filter, make_teaser
-│   ├── search.py             # search_vector, search_graph, search_files, search_faiss
+│   ├── search.py             # search_vector, search_graph, search_hybrid, search_files, search_faiss
+│   ├── retrieval.py          # fusion, ranking rules, Cypher builders
+│   ├── retrieval_config.py   # the (:RetrievalConfig) singleton — boilerplate grams + version
+│   ├── embed.py              # canonical embedding text + provenance-carrying CAS writes
+│   ├── vector_index.py       # vector index with filter properties (DDL/probe builders)
+│   ├── wordindex.py          # edge layer: tokenizer, pair score, picks, nightly rebuild
+│   ├── duplicates.py         # duplicate-Facts owner report + supersede
+│   ├── eval/                 # retrieval + edge evaluation harness and LLM judge
 │   ├── graph.py              # traverse, trace_parameter, graph_stats
 │   ├── state.py              # MemoryStateManager (per-session lazy loading)
 │   ├── learn.py              # parse_learned_topics, sync_facts, rebuild_graph
@@ -257,7 +280,8 @@ ai-memory-system/
 │   ├── hooks/neo4j-memory.json
 │   ├── rules/neo4j-memory.md
 │   └── skills/neo4j-memory/
-├── claude/                   # Claude Code freshness pipeline (not Grok)
+├── claude/                   # Claude Code freshness pipeline (not Grok) — 9 scripts,
+│                             # plus DEPLOYED.md recording when they last matched the deployment
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── CRON_JOBS.md

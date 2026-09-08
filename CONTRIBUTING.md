@@ -10,7 +10,11 @@ This repository (`ai-memory-system`) is the **public redistribution package**.
 
 Its purpose is to provide a clean, usable starting point for new AI agents to build a persistent hybrid memory system.
 
-**The full production system** (the one with deeper RLM tooling, advanced learn sync, memory-v2, heavy domain-specific work, etc.) lives in a private environment. This public repo is deliberately scoped to avoid leaking private information or overly specialized internals.
+**Development happens in a private repository** and reaches this one as releases, so the tip
+here can trail it. The library itself is not held back — 1.4.0 published the retrieval
+engine, edge layer and eval harness. What stays private is unreleased work, the author's own
+memory content, and deployment wiring. This repo is deliberately scoped to avoid leaking
+private information or overly specialized internals.
 
 When contributing, please keep this distinction in mind.
 
